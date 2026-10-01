@@ -1,0 +1,6356 @@
+import React, { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import {
+  Users,
+  Send,
+  MessageSquare,
+  AlertCircle,
+  CheckCircle,
+  Pin,
+  Inbox,
+  Share2,
+  Mic,
+  Volume2,
+  Play,
+  Pause,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  Code as CodeIcon,
+  Smile,
+  Trash2,
+  Copy,
+  Check,
+  MapPin,
+  ThumbsUp,
+  Heart,
+  Globe,
+  Plus,
+  Square,
+  CheckSquare,
+  Sparkles,
+  Maximize2,
+  ChevronLeft,
+  ChevronRight,
+  Vote,
+  Radio,
+  X,
+  Flag,
+  AlertTriangle,
+  MoreHorizontal,
+  CornerUpLeft,
+  Pencil,
+  Bookmark,
+  Bold,
+  Italic,
+  Heading,
+  Quote,
+  List,
+  Folder,
+  ChevronDown,
+  Paperclip,
+  Search,
+  Info,
+  Gift,
+  MessageCircle,
+  FileText,
+  Music,
+  Download,
+  Eye,
+  ZoomIn,
+  ZoomOut,
+  RotateCw,
+  Printer,
+  ExternalLink,
+  FileCode,
+  Minimize2,
+  Loader2,
+  Edit3,
+  Clock,
+  LayoutGrid,
+  MoreVertical,
+  PenSquare,
+  ArrowLeft,
+  ScrollText,
+  BookOpen,
+  ArrowUp
+} from "lucide-react";
+import { AuthModal } from "../../components/AuthModal";
+import { CommunityPostContent } from "../../components/CommunityPostContent";
+import { EmojiPickerPopover } from "../../components/chat/EmojiPickerPopover";
+import { db, auth, storage } from "../../lib/firebase";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
+  updateDoc,
+  setDoc,
+  doc,
+  deleteDoc,
+  serverTimestamp,
+  limit
+} from "firebase/firestore";
+import { useAuth } from "../../contexts/AuthContext";
+import { useLanguage } from "../../contexts/LanguageContext";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useBackButton } from "../../hooks/useBackButton";
+import Editor from "react-simple-code-editor";
+import Prism from "prismjs";
+
+// Helper components
+import { PostComments } from "./PostComments";
+import { DirectMessages } from "./DirectMessages";
+import { getApiUrl } from "../../lib/api";
+import { downloadImageHighRes } from "../../utils/downloadHelper";
+import { CommunityAiAssistantModal } from "../../components/chat/CommunityAiAssistantModal";
+
+interface Post {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorLocation?: string;
+  content: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: any;
+  isEdited?: boolean;
+  editedAt?: any;
+  isPinned?: boolean;
+  replyTo?: {
+    authorName: string;
+    content: string;
+    postId: string;
+  };
+  codeSnippet?: {
+    code: string;
+    language: string;
+    explanation?: string;
+    showPreviewDirectly?: boolean;
+  };
+  voiceNotes?: string[]; // base64 array
+  attachments?: {
+    type: "image" | "video" | "audio" | "document";
+    url: string; // url to file or preview
+    fileName?: string;
+    fileSize?: string;
+    isUploading?: boolean;
+    uploadId?: string;
+  }[];
+  reactions?: {
+    like?: string[]; // userIds
+    love?: string[];
+    haha?: string[];
+    wow?: string[];
+    sad?: string[];
+    angry?: string[];
+  };
+  poll?: {
+    question: string;
+    options: {
+      id: string;
+      text: string;
+      votes: string[]; // userIds who voted
+    }[];
+    isClosed?: boolean;
+  };
+}
+
+// Robust chronological timestamp resolution in milliseconds
+export const getPostTimestampMs = (post: any): number => {
+  if (!post) return 0;
+  const val = post.createdAt;
+  if (!val) {
+    if (typeof post.id === "string") {
+      const match = post.id.match(/\d{10,13}/);
+      if (match) return Number(match[0]);
+    }
+    return Date.now(); // brand new / pending serverTimestamp
+  }
+  if (val instanceof Date) return isNaN(val.getTime()) ? Date.now() : val.getTime();
+  if (typeof val?.toMillis === "function") return val.toMillis();
+  if (typeof val?.toDate === "function") {
+    try {
+      const d = val.toDate();
+      return isNaN(d.getTime()) ? Date.now() : d.getTime();
+    } catch (_) {}
+  }
+  if (typeof val?.seconds === "number") {
+    return val.seconds * 1000 + (val.nanoseconds ? Math.round(val.nanoseconds / 1000000) : 0);
+  }
+  if (typeof val?._seconds === "number") return val._seconds * 1000;
+  if (typeof val === "number") return val < 10000000000 ? val * 1000 : val;
+  if (typeof val === "string") {
+    const parsed = Date.parse(val);
+    if (!isNaN(parsed)) return parsed;
+    const num = Number(val);
+    if (!isNaN(num)) return num < 10000000000 ? num * 1000 : num;
+  }
+  return Date.now();
+};
+
+interface Member {
+  id: string;
+  name: string;
+  role: string;
+  roleColor: string;
+  points: number;
+  country: string;
+  avatar: string;
+  isOnline: boolean;
+}
+
+const localTranslations: Record<string, Record<string, string>> = {
+  fr: {
+    communityTitle: "Asrar Al'umma Group 📿",
+    tgSubtitle: "Canal officiel de secrets spirituels, wirds et codes",
+    onlineSuffix: "en ligne",
+    membersSuffix: "membres",
+    searchPlaceholder: "Rechercher dans la discussion...",
+    msgPlaceholder: "Écrire un message...",
+    runCodeBtn: "Exécuter le code",
+    compiling: "Compilateur en cours...",
+    pinnedMessage: "Message Épinglé",
+    replyingTo: "Répondre à",
+    sendGift: "Offrir un cadeau spirituel (+50 pts)",
+    dmBtn: "Message Privé",
+    addFriend: "Ajouter en ami",
+    rulesCharter: "Charte de l'Al'umma",
+    rule1: "Respect mutuel & sincérité",
+    rule2: "Partage authentique de secrets",
+    rule3: "Pas de publicité ni spam",
+    rule4: "Fraternité & entraide",
+    groupInfo: "Infos du groupe",
+    membersListTitle: "Liste des Membres",
+    sharedMediaTitle: "Médias Partagés",
+    createPollTitle: "Créer un Sondage",
+    createPollBtn: "Publier le sondage",
+    addOptionBtn: "Ajouter un choix",
+    shareCodeTitle: "Partager un Code",
+    shareCodeBtn: "Publier le code",
+    codeExpPlaceholder: "Expliquez brièvement comment utiliser ce wird...",
+    voted: "Voté",
+    votesCount: "votes",
+    noMessages: "Aucun message ici. Lancez la discussion !",
+    copied: "Copié !",
+    deleteSuccess: "Message supprimé avec succès.",
+    giftSuccess: "Cadeau envoyé ! +50 points spirituels.",
+    mustBeLoggedIn: "Veuillez vous connecter pour participer.",
+    commentsAndReplies: "Commentaires & Réponses",
+    hideComments: "Masquer les commentaires",
+    privateMessageDirect: "Message Privé",
+    sendMsg: "Envoyer le message",
+    voiceRecord: "Enregistrer un message vocal",
+    stopAndSend: "Envoyer l'enregistrement vocal",
+    attachMenuTitle: "Joindre du contenu",
+    attachGallery: "Photo & Galerie",
+    attachVideo: "Vidéo",
+    attachDocument: "Document",
+    attachAudio: "Fichier Audio",
+    attachPoll: "Créer Sondage",
+    attachCode: "Partager Code",
+    attachLocation: "Position Spirituelle"
+  },
+  en: {
+    communityTitle: "Asrar Al'umma Group 📿",
+    tgSubtitle: "Official channel for spiritual secrets, wirds & codes",
+    onlineSuffix: "online",
+    membersSuffix: "members",
+    searchPlaceholder: "Search in chat...",
+    msgPlaceholder: "Write a message...",
+    runCodeBtn: "Execute Code",
+    compiling: "Compiling code...",
+    pinnedMessage: "Pinned Message",
+    replyingTo: "Replying to",
+    sendGift: "Send spiritual gift (+50 pts)",
+    dmBtn: "Private Message",
+    addFriend: "Add Friend",
+    rulesCharter: "Al'umma Charter",
+    rule1: "Mutual respect & sincerity",
+    rule2: "Authentic sharing of secrets",
+    rule3: "No ads or spam allowed",
+    rule4: "Brotherhood & spiritual aid",
+    groupInfo: "Group Info",
+    membersListTitle: "Members List",
+    sharedMediaTitle: "Shared Media",
+    createPollTitle: "Create a Poll",
+    createPollBtn: "Publish Poll",
+    addOptionBtn: "Add Option",
+    shareCodeTitle: "Share Code",
+    shareCodeBtn: "Publish Code",
+    codeExpPlaceholder: "Explain briefly how to use this wird...",
+    voted: "Voted",
+    votesCount: "votes",
+    noMessages: "No messages yet. Start the conversation!",
+    copied: "Copied!",
+    deleteSuccess: "Message deleted successfully.",
+    giftSuccess: "Gift sent! +50 spiritual points.",
+    mustBeLoggedIn: "Please log in to participate.",
+    commentsAndReplies: "Comments & Replies",
+    hideComments: "Hide comments",
+    privateMessageDirect: "Private Message",
+    sendMsg: "Send message",
+    voiceRecord: "Record voice message",
+    stopAndSend: "Send voice recording",
+    attachMenuTitle: "Attach Content",
+    attachGallery: "Photo & Gallery",
+    attachVideo: "Video",
+    attachDocument: "Document",
+    attachAudio: "Audio File",
+    attachPoll: "Create Poll",
+    attachCode: "Share Code",
+    attachLocation: "Spiritual Location"
+  },
+  ha: {
+    communityTitle: "Asrar Al'umma Group 📿",
+    tgSubtitle: "Tashar sirrin ruhaniya da dabarun wirdi",
+    onlineSuffix: "kan layi",
+    membersSuffix: "mambobi",
+    searchPlaceholder: "Nemi sako a tattaunawa...",
+    msgPlaceholder: "Rubuta sako...",
+    runCodeBtn: "Gudanar da Code",
+    compiling: "Ana hada code...",
+    pinnedMessage: "Sakon da aka makala",
+    replyingTo: "Mayar da martani ga",
+    sendGift: "Kyautar Ruhaniya (+50 maki)",
+    dmBtn: "Sakon Sirri",
+    addFriend: "Kara Aboki",
+    rulesCharter: "Dokokin Al'umma",
+    rule1: "Girmama juna da gaskiya",
+    rule2: "Raba asirai na gaskiya",
+    rule3: "Babu talla ko spam",
+    rule4: "Taimakon juna na ruhaniya",
+    groupInfo: "Bayanin Rukunin",
+    membersListTitle: "Mambobi",
+    sharedMediaTitle: "Hotuna da Bidiyo",
+    createPollTitle: "Zabe na Rukunin",
+    createPollBtn: "Wallafa Zabe",
+    addOptionBtn: "Kara Zabuka",
+    shareCodeTitle: "Raba Code",
+    shareCodeBtn: "Wallafa Code",
+    codeExpPlaceholder: "Yi bayani a takaice yadda ake amfani da wannan wirdi...",
+    voted: "Zabe ya gama",
+    votesCount: "muryoyi",
+    noMessages: "Babu sakonni a nan. Fara tattaunawa !",
+    copied: "An kofa !",
+    deleteSuccess: "An goge sakon cikin nasara.",
+    giftSuccess: "An tura kyauta! +50 maki na ruhaniya.",
+    mustBeLoggedIn: "Da fatan za a shiga don shiga tattaunawa.",
+    commentsAndReplies: "Sharhi da Martani",
+    hideComments: "Boye sharhi",
+    privateMessageDirect: "Sakon Sirri (DM)",
+    sendMsg: "Tura saƙo",
+    voiceRecord: "Ɗauki muryar saƙo",
+    stopAndSend: "Tura muryar saƙo",
+    attachMenuTitle: "Haɗa Abubuwa",
+    attachGallery: "Hoto & Gallery",
+    attachVideo: "Bidiyo",
+    attachDocument: "Takarda / File",
+    attachAudio: "Fayil ɗin Sauti",
+    attachPoll: "Ƙirƙiri Zaɓe",
+    attachCode: "Raba Code",
+    attachLocation: "Wurin Ruhaniya"
+  }
+};
+
+const CODE_TEMPLATES: Record<string, string> = {
+  javascript: `// Calcul de la valeur mystique (Zikr) d'un Nom Divin
+const zikrName = "Al-Latif";
+const abjadValue = 129; // Valeur abjad de Ya Latif
+const targetDays = 9;
+
+console.log("Nom de Zikr:", zikrName);
+console.log("Valeur Abjad:", abjadValue);
+console.log("Nombre total de récitions sur " + targetDays + " jours:", abjadValue * targetDays);`,
+  python: `# Calcul de la division temporelle pour les prieres de nuit (Tahajjud)
+sunset = "19:15"
+sunrise = "06:10"
+print("Planificateur de veillée spirituelle active")
+print("Sunset:", sunset, "Sunrise:", sunrise)`,
+  sql: `-- Table de suivi de recitations spirituelles d'Asrar
+CREATE TABLE my_zikr_tracker (
+  id INT PRIMARY KEY,
+  zikr_name VARCHAR(100),
+  count_target INT,
+  completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);`,
+  html: `<div style="background-color: #074d2b; padding: 24px; font-family: 'Inter', system-ui, sans-serif; text-align: center; border-radius: 16px; color: #ffffff; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);">
+  <h1 style="font-size: 24px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 16px 0; line-height: 1.2;">
+    PROTOCOLE DE L'APPEL D'IBRAHIM
+  </h1>
+  <p style="color: #facc15; font-size: 16px; font-style: italic; font-weight: 600; margin: 0 0 24px 0; line-height: 1.4;">
+    "Aller au pèlerinage n'est pas une question d'argent, mais une question d'invitation."
+  </p>
+  <div style="background-color: #f8fafc; border-radius: 12px; padding: 20px; text-align: left; color: #1e293b; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
+    <h3 style="color: #0369a1; font-size: 15px; font-weight: 800; text-transform: uppercase; border-bottom: 2px solid #38bdf8; padding-bottom: 6px; margin: 0 0 12px 0;">
+      DESCRIPTION MYSTIQUE
+    </h3>
+    <p style="font-size: 14px; line-height: 1.6; color: #0284c7; font-weight: 500; margin: 0;">
+      Ce secret est le levier spirituel du percement des dimensions pour rejoindre la Kaaba. Il active l'invitation divine immédiate pour accomplir le Hajj ou la Umrah sous la protection céleste.
+    </p>
+  </div>
+</div>`
+};
+
+const ADMIN_EMAILS = [
+  "jibriltengeh4@gmail.com",
+  "sbireino@gmail.com",
+  "tenibawwal10@gmail.com",
+  "jibriltengeh57@gmail.com"
+];
+
+export const checkIsAdmin = (u: any): boolean => {
+  if (!u) return false;
+  if (u.role === "admin" || u.role === "Admin") return true;
+  if (u.email && ADMIN_EMAILS.includes(u.email.toLowerCase())) return true;
+  return false;
+};
+
+export const canUserDeletePost = (post: any, currentUser: any): boolean => {
+  if (!currentUser || !post) return false;
+  if (checkIsAdmin(currentUser)) return true;
+  if (post.authorId && post.authorId === currentUser.uid) return true;
+  if (post.authorName && (post.authorName === currentUser.displayName || post.authorName === currentUser.name)) return true;
+  return false;
+};
+
+export const Community: React.FC = () => {
+  const { language } = useLanguage();
+  const { user } = useAuth();
+  const lang = language === "en" || language === "ha" ? language : "fr";
+  const tLocal = (key: string) => localTranslations[lang][key] || localTranslations["fr"][key] || key;
+
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Firestore & local states
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [membersList, setMembersList] = useState<Member[]>([]);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<"info" | "members" | "media" | "ai">("info");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Message Sending Inputs
+  const [messageText, setMessageText] = useState("");
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [replyToPost, setReplyToPost] = useState<Post | null>(null);
+  const messageInputRef = useRef<HTMLInputElement | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Media Attachment States
+  const [attachedMedias, setAttachedMedias] = useState<{
+    type: "image" | "video" | "audio" | "document";
+    url: string;
+    fileName?: string;
+    fileSize?: string;
+    isUploading?: boolean;
+    uploadId?: string;
+  }[]>([]);
+  const [isUploadingMedia, setIsUploadingMedia] = useState<boolean>(false);
+  const [recordedAudio, setRecordedAudio] = useState<string | null>(null);
+  const [codeSharingEnabled, setCodeSharingEnabled] = useState(true);
+  const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false);
+  const attachMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (attachMenuRef.current && !attachMenuRef.current.contains(event.target as Node)) {
+        setIsAttachMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // AI Chat States
+  const [aiChatMessages, setAiChatMessages] = useState<{ sender: "user" | "ai"; text: string }[]>([
+    {
+      sender: "ai",
+      text: `# 🕌 Salam Alaykoum wa Rahmatoullah\n\nBienvenue dans votre **Guide Spirituel IA Asrar** officiel.\n\n## ✨ Que souhaitez-vous approfondir aujourd'hui ?\n\nPosez-moi vos questions avec précision sur :\n* 📿 **Les wirds authentiques** et méthodes de zikr\n* 🌟 **Les Noms d'Allah (Asma-ul-Husna)** et leurs bienfaits célestes\n* 🌙 **L'interprétation de vos songes** selon Ibn Sirin\n* 📖 **Les secrets spirituels & recettes coraniques** d'AsrarHub`
+    }
+  ]);
+  const [aiInputText, setAiInputText] = useState("");
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+
+  // Voice recording simulation states
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [proVoiceAmplifier, setProVoiceAmplifier] = useState(true);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIntervalRef = useRef<any>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+
+  // Search filter
+  const [chatSearchQuery, setChatSearchQuery] = useState("");
+  const [showSearchInput, setShowSearchInput] = useState(false);
+  const [isScrolledUp, setIsScrolledUp] = useState(false);
+
+  // Modals
+  const [isPollModalOpen, setIsPollModalOpen] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
+
+  const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
+  const [codeLanguage, setCodeLanguage] = useState("javascript");
+  const [codeContent, setCodeContent] = useState(CODE_TEMPLATES.javascript);
+  const [codeExplanation, setCodeExplanation] = useState("");
+  const [showPreviewDirectly, setShowPreviewDirectly] = useState(true);
+  const [activeCodeViewMap, setActiveCodeViewMap] = useState<Record<string, "code" | "preview">>({});
+
+  const [selectedProfileMember, setSelectedProfileMember] = useState<Member | null>(null);
+  const [lightboxImages, setLightboxImages] = useState<string[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [lightboxZoom, setLightboxZoom] = useState(100);
+  const [lightboxRotation, setLightboxRotation] = useState(0);
+  const [isDownloadingHD, setIsDownloadingHD] = useState(false);
+  const [lightboxMeta, setLightboxMeta] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    setLightboxZoom(100);
+    setLightboxRotation(0);
+    const activeUrl = lightboxImages[lightboxIndex];
+    if (activeUrl) {
+      const img = new Image();
+      img.onload = () => {
+        setLightboxMeta({ width: img.naturalWidth || img.width, height: img.naturalHeight || img.height });
+      };
+      img.onerror = () => {
+        setLightboxMeta(null);
+      };
+      img.src = activeUrl;
+    } else {
+      setLightboxMeta(null);
+    }
+  }, [lightboxIndex, lightboxImages]);
+
+  // Professional Document Viewer state
+  const [docViewerFile, setDocViewerFile] = useState<{ url: string; fileName?: string; fileSize?: string; type?: string } | null>(null);
+  const [docViewerTextContent, setDocViewerTextContent] = useState<string | null>(null);
+  const [docViewerZoom, setDocViewerZoom] = useState(100);
+  const [docViewerRotation, setDocViewerRotation] = useState(0);
+  const [docViewerTab, setDocViewerTab] = useState<"viewer" | "text" | "details">("viewer");
+  const [docViewerCopied, setDocViewerCopied] = useState(false);
+  const [docSearchQuery, setDocSearchQuery] = useState("");
+  const [docViewerPdfMode, setDocViewerPdfMode] = useState<"continuous" | "single">(() => {
+    try {
+      const saved = localStorage.getItem("asrarhub_pdf_view_mode");
+      if (saved === "continuous" || saved === "single") return saved;
+    } catch (_) {}
+    return "continuous";
+  });
+  const [isDocViewerFullscreen, setIsDocViewerFullscreen] = useState(false);
+
+  const toggleDocViewerFullscreen = () => {
+    setIsDocViewerFullscreen((prev) => {
+      const next = !prev;
+      try {
+        if (next) {
+          const docElem = document.documentElement;
+          if (docElem.requestFullscreen) {
+            docElem.requestFullscreen().catch(() => {});
+          }
+        } else {
+          if (document.fullscreenElement && document.exitFullscreen) {
+            document.exitFullscreen().catch(() => {});
+          }
+        }
+      } catch (_) {}
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      if (!document.fullscreenElement && isDocViewerFullscreen) {
+        setIsDocViewerFullscreen(false);
+      }
+    };
+    document.addEventListener("fullscreenchange", handleFsChange);
+    document.addEventListener("webkitfullscreenchange", handleFsChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFsChange);
+      document.removeEventListener("webkitfullscreenchange", handleFsChange);
+    };
+  }, [isDocViewerFullscreen]);
+
+  const handleOpenDocViewer = (file: { url: string; fileName?: string; fileSize?: string; type?: string }) => {
+    setDocViewerFile(file);
+    setIsDocViewerFullscreen(false);
+    setDocViewerZoom(100);
+    setDocViewerRotation(0);
+    setDocViewerTab("viewer");
+    setDocViewerCopied(false);
+    setDocSearchQuery("");
+
+    const nameLower = (file.fileName || "").toLowerCase();
+    const isTextExt = [".txt", ".json", ".js", ".ts", ".tsx", ".jsx", ".py", ".html", ".css", ".csv", ".md", ".xml", ".sh", ".sql", ".log"].some((ext) => nameLower.endsWith(ext));
+
+    if (file.url && file.url.startsWith("data:")) {
+      const isTextMime =
+        file.url.startsWith("data:text/") ||
+        file.url.startsWith("data:application/json") ||
+        file.url.startsWith("data:application/javascript") ||
+        file.url.startsWith("data:application/x-javascript") ||
+        file.url.startsWith("data:text/csv") ||
+        file.url.startsWith("data:text/plain") ||
+        file.url.startsWith("data:text/html") ||
+        file.url.startsWith("data:text/xml");
+
+      if (isTextMime || isTextExt) {
+        try {
+          const base64Index = file.url.indexOf(";base64,");
+          if (base64Index !== -1) {
+            const b64 = file.url.substring(base64Index + 8);
+            const decoded = decodeURIComponent(escape(atob(b64)));
+            setDocViewerTextContent(decoded);
+          } else {
+            const commaIndex = file.url.indexOf(",");
+            if (commaIndex !== -1) {
+              setDocViewerTextContent(decodeURIComponent(file.url.substring(commaIndex + 1)));
+            }
+          }
+        } catch (_) {
+          try {
+            const b64 = file.url.split(",")[1];
+            if (b64) setDocViewerTextContent(atob(b64));
+          } catch (err) {
+            setDocViewerTextContent(null);
+          }
+        }
+      } else {
+        setDocViewerTextContent(null);
+      }
+    } else if (file.url && isTextExt) {
+      // Fetch text content from server endpoint
+      const targetTextUrl = file.url.startsWith("http") ? file.url : getApiUrl(file.url);
+      fetch(targetTextUrl)
+        .then((res) => (res.ok ? res.text() : Promise.reject()))
+        .then((txt) => setDocViewerTextContent(txt))
+        .catch(() => setDocViewerTextContent(null));
+    } else {
+      setDocViewerTextContent(null);
+    }
+  };
+
+  // Active threads (comments)
+  const [activeCommentPostId, setActiveCommentPostId] = useState<string | null>(null);
+
+  // Floating Context Menu
+  const [activeContextMenuPostId, setActiveContextMenuPostId] = useState<string | null>(null);
+  const [contextMenuCoords, setContextMenuCoords] = useState<{ x: number; y: number } | null>(null);
+
+  // Floating Quick Navigation Menu (INFOS, MEMBRES, MÉDIAS, IA ASRAR)
+  const [showFloatingMenu, setShowFloatingMenu] = useState<boolean>(false);
+
+  // Message Edit & Delete Delay Settings
+  const [messageEditDeleteLimitMinutes, setMessageEditDeleteLimitMinutes] = useState<number>(4320); // Default 72 hours
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
+  const [editPostContent, setEditPostContent] = useState<string>("");
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState<boolean>(false);
+
+  // Multi-selection / Batch deletion states
+  const [isSelectionMode, setIsSelectionMode] = useState<boolean>(false);
+  const [selectedPostIds, setSelectedPostIds] = useState<string[]>([]);
+  const [postToDelete, setPostToDelete] = useState<{ id?: string; count?: number; isBatch?: boolean; content?: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteToast, setDeleteToast] = useState<string | null>(null);
+
+  // Inline Compiler logs
+  const [compiledOutputs, setCompiledOutputs] = useState<Record<string, string[]>>({});
+  const [isCompilingMap, setIsCompilingMap] = useState<Record<string, boolean>>({});
+  const [htmlPreviews, setHtmlPreviews] = useState<Record<string, string>>({});
+  const [compilerTabMap, setCompilerTabMap] = useState<Record<string, "terminal" | "preview">>({});
+
+  // DM Drawer trigger
+  const [dmRecipient, setDmRecipient] = useState<{ id: string; name: string } | null>(null);
+  const [isDMOpen, setIsDMOpen] = useState(false);
+
+  // Robust playing audio states
+  const [playingAudioKey, setPlayingAudioKey] = useState<string | null>(null);
+  const currentlyPlayingAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const handlePlayVoiceNote = (audioSrc: string, postId: string, index: number) => {
+    const key = `${postId}-${index}`;
+    
+    // If clicking on already playing audio, stop it
+    if (playingAudioKey === key) {
+      if (currentlyPlayingAudioRef.current) {
+        try {
+          currentlyPlayingAudioRef.current.pause();
+          currentlyPlayingAudioRef.current.currentTime = 0;
+        } catch (_) {}
+        currentlyPlayingAudioRef.current = null;
+      }
+      setPlayingAudioKey(null);
+      return;
+    }
+
+    // Stop any previously playing audio first
+    if (currentlyPlayingAudioRef.current) {
+      try {
+        currentlyPlayingAudioRef.current.pause();
+        currentlyPlayingAudioRef.current.currentTime = 0;
+      } catch (_) {}
+      currentlyPlayingAudioRef.current = null;
+    }
+
+    setPlayingAudioKey(key);
+
+    // If it's a simulated voice note or empty, play a gorgeous synthetic sound
+    if (!audioSrc || audioSrc.startsWith("simulated:") || audioSrc === "null" || audioSrc === "undefined") {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          
+          const playTone = (freq: number, start: number, duration: number) => {
+            const osc = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+            
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+            
+            gainNode.gain.setValueAtTime(0, ctx.currentTime + start);
+            gainNode.gain.linearRampToValueAtTime(0.15, ctx.currentTime + start + 0.05);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+            
+            osc.connect(gainNode);
+            gainNode.connect(ctx.destination);
+            
+            osc.start(ctx.currentTime + start);
+            osc.stop(ctx.currentTime + start + duration);
+          };
+
+          // Beautiful ascending high-tech Telegram-like voice note sound sequence
+          playTone(392, 0, 0.35);      // G4
+          playTone(523.25, 0.15, 0.35); // C5
+          playTone(659.25, 0.3, 0.6);   // E5
+          
+          setTimeout(() => {
+            setPlayingAudioKey((prev) => (prev === key ? null : prev));
+            ctx.close();
+          }, 1200);
+        } else {
+          setTimeout(() => {
+            setPlayingAudioKey((prev) => (prev === key ? null : prev));
+          }, 1200);
+        }
+      } catch (err) {
+        console.warn("Synth playback failed:", err);
+        setTimeout(() => {
+          setPlayingAudioKey((prev) => (prev === key ? null : prev));
+        }, 1200);
+      }
+      return;
+    }
+
+    // Standard HTML5 Audio elements
+    try {
+      const snd = new Audio(audioSrc);
+      snd.preload = "auto";
+      currentlyPlayingAudioRef.current = snd;
+      
+      snd.addEventListener("ended", () => {
+        setPlayingAudioKey((prev) => (prev === key ? null : prev));
+        if (currentlyPlayingAudioRef.current === snd) {
+          currentlyPlayingAudioRef.current = null;
+        }
+      });
+
+      snd.addEventListener("error", (e) => {
+        console.warn("Audio element error, falling back to synthesizer chime:", e);
+        try {
+          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioCtx) {
+            const ctx = new AudioCtx();
+            const playTone = (freq: number, start: number, duration: number) => {
+              const osc = ctx.createOscillator();
+              const gainNode = ctx.createGain();
+              osc.type = "sine";
+              osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+              gainNode.gain.setValueAtTime(0, ctx.currentTime + start);
+              gainNode.gain.linearRampToValueAtTime(0.15, ctx.currentTime + start + 0.05);
+              gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+              osc.connect(gainNode);
+              gainNode.connect(ctx.destination);
+              osc.start(ctx.currentTime + start);
+              osc.stop(ctx.currentTime + start + duration);
+            };
+            playTone(392, 0, 0.35);
+            playTone(523.25, 0.15, 0.35);
+            playTone(659.25, 0.3, 0.6);
+            setTimeout(() => {
+              setPlayingAudioKey((prev) => (prev === key ? null : prev));
+              ctx.close();
+            }, 1200);
+          } else {
+            setPlayingAudioKey((prev) => (prev === key ? null : prev));
+          }
+        } catch (synthErr) {
+          setPlayingAudioKey((prev) => (prev === key ? null : prev));
+        }
+      });
+
+      snd.currentTime = 0;
+      const playPromise = snd.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((playErr) => {
+          console.warn("Audio play promise rejected, using synthesizer chime:", playErr);
+          try {
+            const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+            if (AudioCtx) {
+              const ctx = new AudioCtx();
+              const playTone = (freq: number, start: number, duration: number) => {
+                const osc = ctx.createOscillator();
+                const gainNode = ctx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+                gainNode.gain.setValueAtTime(0, ctx.currentTime + start);
+                gainNode.gain.linearRampToValueAtTime(0.15, ctx.currentTime + start + 0.05);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+                osc.connect(gainNode);
+                gainNode.connect(ctx.destination);
+                osc.start(ctx.currentTime + start);
+                osc.stop(ctx.currentTime + start + duration);
+              };
+              playTone(392, 0, 0.35);
+              playTone(523.25, 0.15, 0.35);
+              playTone(659.25, 0.3, 0.6);
+              setTimeout(() => {
+                setPlayingAudioKey((prev) => (prev === key ? null : prev));
+                ctx.close();
+              }, 1200);
+            } else {
+              setPlayingAudioKey((prev) => (prev === key ? null : prev));
+            }
+          } catch (synthErr) {
+            setPlayingAudioKey((prev) => (prev === key ? null : prev));
+          }
+        });
+      }
+    } catch (createErr) {
+      console.warn("Could not instantiate Audio helper:", createErr);
+      setPlayingAudioKey((prev) => (prev === key ? null : prev));
+    }
+  };
+
+  // Subscribe to community global settings
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "community_settings", "global"), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setCodeSharingEnabled(data.codeSharingEnabled !== false);
+        if (data.messageEditDeleteLimitMinutes !== undefined) {
+          setMessageEditDeleteLimitMinutes(Number(data.messageEditDeleteLimitMinutes));
+        }
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const handleToggleCodeSharing = async () => {
+    try {
+      await setDoc(doc(db, "community_settings", "global"), {
+        codeSharingEnabled: !codeSharingEnabled
+      }, { merge: true });
+    } catch (err) {
+      console.error("Error toggling code sharing settings:", err);
+    }
+  };
+
+  const handleSendAiMessage = async (overrideText?: string) => {
+    const textToSend = overrideText || aiInputText;
+    if (!textToSend.trim() || isAiLoading) return;
+
+    setAiInputText("");
+    const newHistory = [...aiChatMessages, { sender: "user" as const, text: textToSend }];
+    setAiChatMessages(newHistory);
+    setIsAiLoading(true);
+
+    try {
+      const response = await fetch(getApiUrl("/api/community/ai-chat"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: textToSend,
+          history: newHistory.slice(-6)
+        })
+      });
+      const data = await response.json();
+      if (data.reply) {
+        setAiChatMessages((prev) => [...prev, { sender: "ai", text: data.reply }]);
+      } else {
+        setAiChatMessages((prev) => [...prev, { sender: "ai", text: "Je n'ai pas pu me connecter à mon réservoir de sagesse spirituelle." }]);
+      }
+    } catch (err) {
+      console.error("AI guide chat client error:", err);
+      setAiChatMessages((prev) => [...prev, { sender: "ai", text: "Une erreur s'est produite lors de la connexion avec votre guide." }]);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleResetAiChat = () => {
+    setAiChatMessages([
+      {
+        sender: "ai",
+        text: `# 🕌 Salam Alaykoum wa Rahmatoullah\n\nBienvenue dans votre **Guide Spirituel IA Asrar** officiel.\n\n## ✨ Que souhaitez-vous approfondir aujourd'hui ?\n\nPosez-moi vos questions avec précision sur :\n* 📿 **Les wirds authentiques** et méthodes de zikr\n* 🌟 **Les Noms d'Allah (Asma-ul-Husna)** et leurs bienfaits célestes\n* 🌙 **L'interprétation de vos songes** selon Ibn Sirin\n* 📖 **Les secrets spirituels & recettes coraniques** d'AsrarHub`
+      }
+    ]);
+  };
+
+  // Refs for scroll container & bottom anchor
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to bottom helper - guarantees scrolling to the absolute latest message
+  const scrollToBottom = (smooth = false) => {
+    const doScroll = () => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "end" });
+      } else if (chatContainerRef.current) {
+        if (smooth) {
+          chatContainerRef.current.scrollTo({
+            top: chatContainerRef.current.scrollHeight + 1000,
+            behavior: "smooth"
+          });
+        } else {
+          chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight + 1000;
+        }
+      }
+    };
+    doScroll();
+    requestAnimationFrame(doScroll);
+    setTimeout(doScroll, 80);
+    setTimeout(doScroll, 200);
+    setTimeout(doScroll, 400);
+  };
+
+  // Helper to deduplicate and sort all posts strictly chronologically (latest at bottom)
+  const sortAndDeduplicatePosts = (allPosts: Post[]): Post[] => {
+    const map = new Map<string, Post>();
+    allPosts.forEach((p) => {
+      if (p && p.id) {
+        map.set(p.id, p);
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => getPostTimestampMs(a) - getPostTimestampMs(b));
+  };
+
+  // Fetch Community Posts with seamless real-time syncing and chronological ordering
+  useEffect(() => {
+    const postsCollectionRef = collection(db, "community_posts");
+
+    const getLocalPosts = (): Post[] => {
+      try {
+        const raw = localStorage.getItem("asrarhub_local_posts");
+        return raw ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const unsubscribe = onSnapshot(
+      postsCollectionRef,
+      (snapshot) => {
+        const currentUid = user?.uid || auth.currentUser?.uid;
+        const remotePosts = snapshot.docs
+          .map((docSnap) => {
+            const data = docSnap.data();
+            return {
+              id: docSnap.id,
+              ...data,
+              reactions: data.reactions || { like: [], love: [], haha: [], wow: [], sad: [], angry: [] }
+            } as Post;
+          })
+          .filter((post) => {
+            // Admin sees all; users see approved posts, unflagged posts, or their own posts
+            return (
+              checkIsAdmin(user) ||
+              post.status === "approved" ||
+              !post.status ||
+              (currentUid && post.authorId === currentUid)
+            );
+          });
+
+        const localPosts = getLocalPosts();
+        const mergedSorted = sortAndDeduplicatePosts([...remotePosts, ...localPosts]);
+
+        setPosts(mergedSorted);
+        setTimeout(() => scrollToBottom(false), 80);
+      },
+      (error) => {
+        console.warn("Community posts onSnapshot error (using local storage fallback):", error);
+        setPosts(sortAndDeduplicatePosts(getLocalPosts()));
+      }
+    );
+
+    const handleLocalPostsChanged = () => {
+      const localPosts = getLocalPosts();
+      setPosts((prev) => sortAndDeduplicatePosts([...prev, ...localPosts]));
+      setTimeout(() => scrollToBottom(true), 80);
+    };
+
+    window.addEventListener("asrarhub_local_posts_changed", handleLocalPostsChanged);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener("asrarhub_local_posts_changed", handleLocalPostsChanged);
+    };
+  }, [user]);
+
+  // Fetch Users
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, "users"), (snapshot) => {
+      const fetched: Member[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const role = data.role || "Aspirant";
+        let roleColor = "from-blue-500 to-indigo-600";
+        if (role === "admin" || role === "Admin") roleColor = "from-red-500 to-rose-600";
+        else if (role === "Sage" || role === "Scholar" || role === "Érudit") roleColor = "from-amber-500 to-yellow-600";
+        else if (role === "Expert") roleColor = "from-emerald-500 to-teal-600";
+
+        fetched.push({
+          id: docSnap.id,
+          name: data.displayName || data.name || "Aspirant",
+          role: role,
+          roleColor: roleColor,
+          points: data.points || data.totalPoints || data.spiritualPoints || 350,
+          country: data.country || "Maroc",
+          avatar: data.avatar || "📿",
+          isOnline: data.isOnline || false,
+        });
+      });
+      setMembersList(fetched);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Focus message input or prompt login
+  const focusMessageInput = () => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    scrollToBottom(true);
+    setTimeout(() => {
+      messageInputRef.current?.focus();
+    }, 120);
+  };
+
+  const handleChatScroll = () => {
+    if (!chatContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
+    setIsScrolledUp(distanceToBottom > 160);
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [posts.length]);
+
+  // Cleanup Audio Context and MediaStream safely to prevent crackling & memory leaks
+  const cleanupAudioResources = () => {
+    if (audioCtxRef.current) {
+      try {
+        audioCtxRef.current.close();
+      } catch (_) {}
+      audioCtxRef.current = null;
+    }
+    if (micStreamRef.current) {
+      try {
+        micStreamRef.current.getTracks().forEach((track) => track.stop());
+      } catch (_) {}
+      micStreamRef.current = null;
+    }
+  };
+
+  // Handle Voice Recording with Clean HD Studio Audio (Anti-Crackling & Gain Normalization)
+  const startRecording = async () => {
+    audioChunksRef.current = [];
+    setRecordedAudio(null);
+    setRecordingSeconds(0);
+    cleanupAudioResources();
+
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+            sampleRate: { ideal: 48000 },
+          },
+        });
+        micStreamRef.current = stream;
+
+        let recordingStream = stream;
+
+        // Apply Gentle Studio Dynamics DSP pipeline if enabled (Clean HD, Anti-Crackling)
+        if (proVoiceAmplifier) {
+          try {
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            if (AudioContextClass) {
+              const audioCtx = new AudioContextClass();
+              audioCtxRef.current = audioCtx;
+
+              if (audioCtx.state === "suspended") {
+                await audioCtx.resume();
+              }
+
+              const source = audioCtx.createMediaStreamSource(stream);
+
+              // 1. Gentle Highpass filter to eliminate low frequency mic thuds (< 80 Hz)
+              const highpass = audioCtx.createBiquadFilter();
+              highpass.type = "highpass";
+              highpass.frequency.value = 80;
+
+              // 2. Soft Dynamics Compressor to balance vocal volume without distortion
+              const compressor = audioCtx.createDynamicsCompressor();
+              compressor.threshold.setValueAtTime(-16, audioCtx.currentTime);
+              compressor.knee.setValueAtTime(10, audioCtx.currentTime);
+              compressor.ratio.setValueAtTime(2.5, audioCtx.currentTime);
+              compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+              compressor.release.setValueAtTime(0.12, audioCtx.currentTime);
+
+              // 3. Clean Master Gain (0.90x to avoid 0dBFS clipping distortion & crackling)
+              const masterGain = audioCtx.createGain();
+              masterGain.gain.value = 0.90;
+
+              const destination = audioCtx.createMediaStreamDestination();
+              source.connect(highpass);
+              highpass.connect(compressor);
+              compressor.connect(masterGain);
+              masterGain.connect(destination);
+
+              recordingStream = destination.stream;
+            }
+          } catch (dspErr) {
+            console.warn("Professional voice DSP fallback to raw stream:", dspErr);
+          }
+        }
+
+        let options: any = { audioBitsPerSecond: 128000 };
+        if (typeof MediaRecorder.isTypeSupported === "function") {
+          if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+            options = { mimeType: "audio/webm;codecs=opus", audioBitsPerSecond: 128000 };
+          } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+            options = { mimeType: "audio/webm", audioBitsPerSecond: 128000 };
+          } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
+            options = { mimeType: "audio/mp4", audioBitsPerSecond: 128000 };
+          } else if (MediaRecorder.isTypeSupported("audio/ogg")) {
+            options = { mimeType: "audio/ogg", audioBitsPerSecond: 128000 };
+          }
+        }
+
+        const mediaRecorder = new MediaRecorder(recordingStream, options);
+        mediaRecorderRef.current = mediaRecorder;
+
+        mediaRecorder.ondataavailable = (event: any) => {
+          if (event.data && event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          const mimeType = mediaRecorder.mimeType || "audio/webm";
+          const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+          const reader = new FileReader();
+          reader.readAsDataURL(audioBlob);
+          reader.onloadend = () => {
+            setRecordedAudio(reader.result as string);
+          };
+          cleanupAudioResources();
+        };
+
+        // 100ms hardware stabilization buffer so mic & WebAudio stream start smoothly without losing first syllable
+        await new Promise((r) => setTimeout(r, 100));
+
+        // Start without timeslice parameter to produce one continuous, seam-free audio file (eliminates slice pops/crackles)
+        mediaRecorder.start();
+        setIsRecording(true);
+        recordingIntervalRef.current = setInterval(() => {
+          setRecordingSeconds((prev) => prev + 1);
+        }, 1000);
+      } else {
+        throw new Error("Recording not supported");
+      }
+    } catch (err) {
+      console.warn("MediaRecorder mic access error, starting simulated timer:", err);
+      setIsRecording(true);
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    }
+  };
+
+  const stopRecording = () => {
+    setIsRecording(false);
+    if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (err) {
+        console.error("Error stopping media recorder, generating chime:", err);
+        cleanupAudioResources();
+        generateSimulatedVoiceNote();
+      }
+    } else {
+      cleanupAudioResources();
+      generateSimulatedVoiceNote();
+    }
+  };
+
+  const generateSyntheticWavBase64 = (): Promise<string> => {
+    return new Promise((resolve) => {
+      try {
+        const sampleRate = 44100; // Studio CD Quality (44.1kHz)
+        const duration = 2.0; // seconds
+        const numSamples = Math.floor(sampleRate * duration);
+        const buffer = new ArrayBuffer(44 + numSamples * 2);
+        const view = new DataView(buffer);
+
+        /* RIFF identifier */
+        view.setUint32(0, 0x52494646, false); // "RIFF"
+        /* file length */
+        view.setUint32(4, 36 + numSamples * 2, true);
+        /* RIFF type */
+        view.setUint32(8, 0x57415645, false); // "WAVE"
+        /* format chunk identifier */
+        view.setUint32(12, 0x666d7420, false); // "fmt "
+        /* format chunk length */
+        view.setUint32(16, 16, true);
+        /* sample format (raw) */
+        view.setUint16(20, 1, true);
+        /* channel count */
+        view.setUint16(22, 1, true);
+        /* sample rate */
+        view.setUint32(24, sampleRate, true);
+        /* byte rate (sample rate * block align) */
+        view.setUint32(28, sampleRate * 2, true);
+        /* block align (channel count * bytes per sample) */
+        view.setUint16(32, 2, true);
+        /* bits per sample */
+        view.setUint16(34, 16, true);
+        /* data chunk identifier */
+        view.setUint32(36, 0x64617461, false); // "data"
+        /* data chunk length */
+        view.setUint32(40, numSamples * 2, true);
+
+        // Studio HD chime tone with continuous phase & anti-pop fade envelope
+        let phase = 0;
+        for (let i = 0; i < numSamples; i++) {
+          const t = i / sampleRate;
+          const fundamental = t < 0.8 ? 523.25 : 659.25; // C5 to E5 harmonic scale
+          phase += (2 * Math.PI * fundamental) / sampleRate;
+
+          // Smooth 30ms fade-in & 150ms fade-out envelope to eliminate waveform start/end edge pops
+          const fadeIn = Math.min(1, t / 0.03);
+          const fadeOut = Math.max(0, 1 - (t - (duration - 0.15)) / 0.15);
+          const envelope = fadeIn * Math.min(1, fadeOut);
+
+          const val1 = Math.sin(phase) * 0.65;
+          const val2 = Math.sin(phase * 2) * 0.25;
+
+          const sample = (val1 + val2) * 32767 * 0.4 * envelope;
+          view.setInt16(44 + i * 2, Math.max(-32768, Math.min(32767, Math.round(sample))), true);
+        }
+
+        const blob = new Blob([buffer], { type: "audio/wav" });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          resolve(reader.result as string);
+        };
+        reader.readAsDataURL(blob);
+      } catch (e) {
+        console.error("Error creating synthetic wav chime:", e);
+        resolve(`simulated:voice_note_chime_${Date.now()}`);
+      }
+    });
+  };
+
+  const generateSimulatedVoiceNote = async () => {
+    const audioUrl = await generateSyntheticWavBase64();
+    setRecordedAudio(audioUrl);
+  };
+
+  const stopAndSendRecording = async () => {
+    setIsRecording(false);
+    if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try {
+        mediaRecorderRef.current.onstop = () => {
+          const mimeType = mediaRecorderRef.current?.mimeType || "audio/webm";
+          const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const audioUrl = reader.result as string;
+            cleanupAudioResources();
+            await doSendMessage(audioUrl);
+          };
+          reader.readAsDataURL(audioBlob);
+        };
+        mediaRecorderRef.current.stop();
+      } catch (err) {
+        console.error("Error stopping media recorder, sending synthetic chime:", err);
+        cleanupAudioResources();
+        const chime = await generateSyntheticWavBase64();
+        await doSendMessage(chime);
+      }
+    } else {
+      cleanupAudioResources();
+      const chime = await generateSyntheticWavBase64();
+      await doSendMessage(chime);
+    }
+  };
+
+  // Helper: Process and preserve high-resolution images while optimizing size for Firestore
+  const processHighResImage = (file: File): Promise<{ url: string; fileSize: string }> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const rawDataUrl = e.target?.result as string;
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 2048; // Crisp 2K High Resolution
+          let width = img.naturalWidth || img.width;
+          let height = img.naturalHeight || img.height;
+
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, 0, 0, width, height);
+            const highResDataUrl = canvas.toDataURL("image/jpeg", 0.90);
+            const estSize = Math.round((highResDataUrl.length * 3) / 4);
+            const sizeStr = estSize >= 1024 * 1024 ? `${(estSize / (1024 * 1024)).toFixed(1)} MB` : `${Math.round(estSize / 1024)} KB`;
+            resolve({ url: highResDataUrl, fileSize: sizeStr });
+            return;
+          }
+          resolve({
+            url: rawDataUrl,
+            fileSize: file.size >= 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${(file.size / 1024).toFixed(1)} KB`
+          });
+        };
+        img.onerror = () => {
+          resolve({
+            url: rawDataUrl,
+            fileSize: file.size >= 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${(file.size / 1024).toFixed(1)} KB`
+          });
+        };
+        img.src = rawDataUrl;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Helper: Reliable file uploader for Community documents and media (PDFs, Docs, etc.)
+  // Uploads to persistent server storage (/api/community/upload) with Firebase Storage cloud fallback
+  const uploadCommunityFile = async (
+    file: File,
+    mediaType: "image" | "video" | "audio" | "document"
+  ): Promise<string> => {
+    // 1. Primary: Server-side persistent storage
+    try {
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string) || "");
+        reader.onerror = (e) => reject(e);
+        reader.readAsDataURL(file);
+      });
+
+      if (base64Data) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 35000);
+
+        const response = await fetch(getApiUrl("/api/community/upload"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: file.name,
+            fileData: base64Data,
+            fileType: mediaType
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          const json = await response.json();
+          if (json.url) {
+            return json.url;
+          }
+        }
+      }
+    } catch (serverErr) {
+      console.warn("[Community Upload] Server upload failed or timed out, trying cloud fallback:", serverErr);
+    }
+
+    // 2. Cloud Fallback: Firebase Storage
+    try {
+      if (storage) {
+        const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `community_uploads/${Date.now()}_${cleanName}`;
+        const fileRef = ref(storage, storagePath);
+        await uploadBytes(fileRef, file);
+        const downloadUrl = await getDownloadURL(fileRef);
+        if (downloadUrl) {
+          return downloadUrl;
+        }
+      }
+    } catch (cloudErr) {
+      console.warn("[Community Upload] Firebase storage upload fallback failed:", cloudErr);
+    }
+
+    // 3. Fallback for very small files (< 120KB) as data URL if server and storage are unavailable
+    if (file.size < 120 * 1024) {
+      const dataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string) || "");
+        reader.readAsDataURL(file);
+      });
+      if (dataUrl) return dataUrl;
+    }
+
+    throw new Error("Impossible de téléverser le document. Veuillez vérifier votre connexion.");
+  };
+
+  // Attach Media File Change (Supports Images, Videos, Audios, Documents)
+  const handleMediaAttach = async (e: React.ChangeEvent<HTMLInputElement>, filterType?: "image" | "video" | "audio" | "document") => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const fileList = Array.from(files) as File[];
+    // Reset file input value immediately so user can re-select the same file
+    e.target.value = "";
+
+    for (const file of fileList) {
+      if (file.size > 30 * 1024 * 1024) {
+        alert(lang === "ha" ? "Fayil ɗin ya yi yawa (Max 30MB)." : lang === "en" ? "File too large (Max 30MB)." : "Fichier trop volumineux (Max 30Mo).");
+        continue;
+      }
+
+      let type: "image" | "video" | "audio" | "document" = filterType || "image";
+      if (!filterType) {
+        if (file.type.startsWith("video/")) {
+          type = "video";
+        } else if (file.type.startsWith("audio/")) {
+          type = "audio";
+        } else if (file.type.startsWith("image/")) {
+          type = "image";
+        } else if (
+          file.type.startsWith("text/") ||
+          file.type.includes("pdf") ||
+          file.type.includes("document") ||
+          file.type.includes("sheet") ||
+          file.type.includes("zip") ||
+          file.type.includes("rar") ||
+          file.name.endsWith(".pdf") ||
+          file.name.endsWith(".doc") ||
+          file.name.endsWith(".docx") ||
+          file.name.endsWith(".txt") ||
+          file.name.endsWith(".zip") ||
+          file.name.endsWith(".xlsx") ||
+          file.name.endsWith(".csv")
+        ) {
+          type = "document";
+        }
+      }
+
+      const formattedSize = file.size >= 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+      const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+      // Immediately add a pending item with loading indicator
+      setAttachedMedias((prev) => [
+        ...prev,
+        {
+          type,
+          url: "",
+          fileName: file.name,
+          fileSize: formattedSize,
+          isUploading: true,
+          uploadId
+        }
+      ]);
+      setIsUploadingMedia(true);
+
+      try {
+        let uploadedUrl: string;
+        if (type === "image") {
+          try {
+            const processed = await processHighResImage(file);
+            if (processed.url.length < 80000) {
+              uploadedUrl = processed.url;
+            } else {
+              uploadedUrl = await uploadCommunityFile(file, "image");
+            }
+          } catch (_) {
+            uploadedUrl = await uploadCommunityFile(file, "image");
+          }
+        } else {
+          uploadedUrl = await uploadCommunityFile(file, type);
+        }
+
+        // Update item with the real permanent URL
+        setAttachedMedias((prev) =>
+          prev.map((item) =>
+            item.uploadId === uploadId
+              ? {
+                  type,
+                  url: uploadedUrl,
+                  fileName: file.name,
+                  fileSize: formattedSize,
+                  isUploading: false
+                }
+              : item
+          )
+        );
+      } catch (err: any) {
+        console.error("Upload error for file:", file.name, err);
+        setAttachedMedias((prev) => prev.filter((item) => item.uploadId !== uploadId));
+        alert(
+          lang === "ha"
+            ? `An sami matsala wajen ɗora ${file.name}. Da fatan za a sake gwadawa.`
+            : lang === "en"
+            ? `Failed to upload ${file.name}. Please check your connection and retry.`
+            : `Échec du téléversement de ${file.name}. Veuillez vérifier votre connexion et réessayer.`
+        );
+      } finally {
+        setIsUploadingMedia(false);
+      }
+    }
+  };
+
+  // Submit standard text message, audio, or attachment
+  const doSendMessage = async (voiceAudioUrl?: string) => {
+    const currentAuthUser = auth.currentUser;
+    const effectiveUid = user?.uid || currentAuthUser?.uid;
+    if (!effectiveUid) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    // Check if any attached media is still actively uploading
+    if (attachedMedias.some((m) => m.isUploading)) {
+      alert(
+        lang === "ha"
+          ? "Ana ɗora fayil ɗin, da fatan a jira..."
+          : lang === "en"
+          ? "File is uploading, please wait a moment..."
+          : "Téléversement du fichier en cours, veuillez patienter un instant..."
+      );
+      return;
+    }
+
+    const audioToSend = voiceAudioUrl || recordedAudio;
+    const validAttachments = attachedMedias
+      .filter((m) => m.url && !m.isUploading)
+      .map((m) => ({
+        type: m.type || "document",
+        url: m.url,
+        fileName: m.fileName || "document",
+        fileSize: m.fileSize || "Taille inconnue"
+      }));
+
+    if (!messageText.trim() && validAttachments.length === 0 && !audioToSend) {
+      return;
+    }
+
+    const authorName = user?.name || currentAuthUser?.displayName || user?.email || "Aspirant";
+    const authorLocation = user?.country ? `${user.country}` : "Sénégal";
+    const now = new Date();
+    const tempId = "local_msg_" + Date.now();
+
+    const optimisticPost: Post = {
+      id: tempId,
+      authorId: effectiveUid,
+      authorName,
+      authorLocation,
+      status: "approved",
+      content: messageText.trim(),
+      createdAt: now,
+      reactions: {
+        like: [],
+        love: [],
+        haha: [],
+        wow: [],
+        sad: [],
+        angry: []
+      }
+    };
+
+    if (replyToPost) {
+      optimisticPost.replyTo = {
+        authorName: replyToPost.authorName || "",
+        content: (replyToPost.content || "").substring(0, 50),
+        postId: replyToPost.id || ""
+      };
+    }
+
+    if (validAttachments.length > 0) {
+      optimisticPost.attachments = validAttachments;
+    }
+
+    if (audioToSend) {
+      optimisticPost.voiceNotes = [audioToSend];
+    }
+
+    // Instant optimistic render: place at the very bottom of the feed
+    setPosts((prev) => sortAndDeduplicatePosts([...prev, optimisticPost]));
+
+    // Reset inputs immediately
+    setMessageText("");
+    setReplyToPost(null);
+    setAttachedMedias([]);
+    setRecordedAudio(null);
+    scrollToBottom(true);
+
+    // Sanitize payload strictly: eliminate undefined values to prevent Firestore rejection
+    const payload: any = {
+      authorId: effectiveUid,
+      authorName,
+      authorLocation,
+      status: "approved",
+      content: optimisticPost.content || "",
+      createdAt: serverTimestamp(),
+      reactions: optimisticPost.reactions || { like: [], love: [], haha: [], wow: [], sad: [], angry: [] }
+    };
+
+    if (optimisticPost.replyTo) {
+      payload.replyTo = {
+        authorName: optimisticPost.replyTo.authorName || "",
+        content: optimisticPost.replyTo.content || "",
+        postId: optimisticPost.replyTo.postId || ""
+      };
+    }
+    if (validAttachments.length > 0) {
+      payload.attachments = validAttachments;
+    }
+    if (optimisticPost.voiceNotes && optimisticPost.voiceNotes.length > 0) {
+      payload.voiceNotes = optimisticPost.voiceNotes;
+    }
+
+    try {
+      await addDoc(collection(db, "community_posts"), payload);
+      scrollToBottom(true);
+    } catch (err) {
+      console.warn("Primary Firestore publish error, attempting with ISO timestamp fallback:", err);
+      try {
+        const fallbackPayload = {
+          ...payload,
+          createdAt: now.toISOString()
+        };
+        await addDoc(collection(db, "community_posts"), fallbackPayload);
+        scrollToBottom(true);
+      } catch (err2) {
+        console.error("Fatal error saving post to Firestore:", err2);
+        try {
+          const local = JSON.parse(localStorage.getItem("asrarhub_local_posts") || "[]");
+          local.push({
+            ...optimisticPost,
+            createdAt: now.toISOString()
+          });
+          localStorage.setItem("asrarhub_local_posts", JSON.stringify(local.slice(-50)));
+        } catch (_) {}
+        scrollToBottom(true);
+      }
+    }
+  };
+
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    await doSendMessage();
+  };
+
+  // Submit Poll Message
+  const handlePublishPoll = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const currentAuthUser = auth.currentUser;
+    const effectiveUid = user?.uid || currentAuthUser?.uid;
+    if (!effectiveUid) {
+      setShowAuthModal(true);
+      return;
+    }
+    if (!pollQuestion.trim()) return;
+
+    const options = pollOptions.filter((opt) => opt.trim() !== "");
+    if (options.length < 2) {
+      alert("Veuillez fournir au moins 2 options.");
+      return;
+    }
+
+    const authorName = user?.name || currentAuthUser?.displayName || user?.email || "Aspirant";
+    const authorLocation = user?.country || "Sénégal";
+    const now = new Date();
+    const tempId = "local_poll_" + Date.now();
+
+    const optimisticPollPost: Post = {
+      id: tempId,
+      authorId: effectiveUid,
+      authorName,
+      authorLocation,
+      status: "approved",
+      content: `📊 [Sondage] ${pollQuestion.trim()}`,
+      createdAt: now,
+      reactions: { like: [], love: [], haha: [], wow: [], sad: [], angry: [] },
+      poll: {
+        question: pollQuestion.trim(),
+        options: options.map((opt, idx) => ({
+          id: `opt_${Date.now()}_${idx}`,
+          text: opt.trim(),
+          votes: []
+        })),
+        isClosed: false
+      }
+    };
+
+    setPosts((prev) => sortAndDeduplicatePosts([...prev, optimisticPollPost]));
+    setPollQuestion("");
+    setPollOptions(["", ""]);
+    setIsPollModalOpen(false);
+    scrollToBottom(true);
+
+    const payload: any = {
+      authorId: effectiveUid,
+      authorName,
+      authorLocation,
+      status: "approved",
+      content: optimisticPollPost.content,
+      createdAt: serverTimestamp(),
+      reactions: optimisticPollPost.reactions,
+      poll: optimisticPollPost.poll
+    };
+
+    try {
+      await addDoc(collection(db, "community_posts"), payload);
+      scrollToBottom(true);
+    } catch (err) {
+      console.warn("Poll Firestore save error, saving to local fallback:", err);
+      try {
+        const local = JSON.parse(localStorage.getItem("asrarhub_local_posts") || "[]");
+        local.push({ ...optimisticPollPost, createdAt: now.toISOString() });
+        localStorage.setItem("asrarhub_local_posts", JSON.stringify(local));
+      } catch (_) {}
+      scrollToBottom(true);
+    }
+  };
+
+  // Submit Code Message
+  const handlePublishCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const currentAuthUser = auth.currentUser;
+    const effectiveUid = user?.uid || currentAuthUser?.uid;
+    if (!effectiveUid) {
+      setShowAuthModal(true);
+      return;
+    }
+    if (!codeContent.trim()) return;
+
+    const authorName = user?.name || currentAuthUser?.displayName || user?.email || "Aspirant";
+    const authorLocation = user?.country || "Sénégal";
+    const now = new Date();
+    const tempId = "local_code_" + Date.now();
+
+    const optimisticCodePost: Post = {
+      id: tempId,
+      authorId: effectiveUid,
+      authorName,
+      authorLocation,
+      status: "approved",
+      content: codeExplanation.trim() || `💻 [Code] Partage de code ${codeLanguage}`,
+      createdAt: now,
+      reactions: { like: [], love: [], haha: [], wow: [], sad: [], angry: [] },
+      codeSnippet: {
+        code: codeContent.trim(),
+        language: codeLanguage,
+        explanation: codeExplanation.trim(),
+        showPreviewDirectly: codeLanguage === "html" ? true : false
+      }
+    };
+
+    setPosts((prev) => sortAndDeduplicatePosts([...prev, optimisticCodePost]));
+    setCodeContent(CODE_TEMPLATES.javascript);
+    setCodeExplanation("");
+    setShowPreviewDirectly(true);
+    setIsCodeModalOpen(false);
+    scrollToBottom(true);
+
+    const payload: any = {
+      authorId: effectiveUid,
+      authorName,
+      authorLocation,
+      status: "approved",
+      content: optimisticCodePost.content,
+      createdAt: serverTimestamp(),
+      reactions: optimisticCodePost.reactions,
+      codeSnippet: optimisticCodePost.codeSnippet
+    };
+
+    try {
+      await addDoc(collection(db, "community_posts"), payload);
+      scrollToBottom(true);
+    } catch (err) {
+      console.warn("Code Firestore save error, saving to local fallback:", err);
+      try {
+        const local = JSON.parse(localStorage.getItem("asrarhub_local_posts") || "[]");
+        local.push({ ...optimisticCodePost, createdAt: now.toISOString() });
+        localStorage.setItem("asrarhub_local_posts", JSON.stringify(local));
+      } catch (_) {}
+      scrollToBottom(true);
+    }
+  };
+
+  // Real-time Poll voting inside bubble
+  const handlePollVote = async (postId: string, optionId: string) => {
+    if (!user) return;
+    const post = posts.find((p) => p.id === postId);
+    if (!post || !post.poll) return;
+
+    const updatedOptions = post.poll.options.map((opt) => {
+      let votes = opt.votes ? [...opt.votes] : [];
+      // If user clicked this option, toggle their vote. If clicked another, remove their vote from this option
+      if (opt.id === optionId) {
+        if (votes.includes(user.uid)) {
+          votes = votes.filter((v) => v !== user.uid);
+        } else {
+          votes.push(user.uid);
+        }
+      } else {
+        votes = votes.filter((v) => v !== user.uid);
+      }
+      return { ...opt, votes };
+    });
+
+    try {
+      await updateDoc(doc(db, "community_posts", postId), {
+        "poll.options": updatedOptions
+      });
+    } catch (err) {
+      console.error("Error voting on poll:", err);
+    }
+  };
+
+  // Reaction picker triggers
+  const handleAddReaction = async (postId: string, react: "like" | "love" | "haha" | "wow" | "sad" | "angry") => {
+    if (!user) return;
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+
+    const rx = { ...post.reactions } as any;
+    const types = ["like", "love", "haha", "wow", "sad", "angry"];
+
+    // Ensure array structure
+    types.forEach((t) => {
+      if (!rx[t]) rx[t] = [];
+    });
+
+    const alreadyHasThis = rx[react].includes(user.uid);
+
+    // Remove user's previous reaction from all types (single reaction constraint)
+    types.forEach((t) => {
+      rx[t] = rx[t].filter((uid: string) => uid !== user.uid);
+    });
+
+    // Toggle reaction
+    if (!alreadyHasThis) {
+      rx[react].push(user.uid);
+    }
+
+    try {
+      await updateDoc(doc(db, "community_posts", postId), { reactions: rx });
+    } catch (err) {
+      console.error("Error updating reaction:", err);
+    }
+    setActiveContextMenuPostId(null);
+  };
+
+  // Helper: format rich summary for pinned messages of any type (text, photos, video, PDF, audio, poll, code)
+  const getPinnedPostSummary = (post: Post) => {
+    const parts: string[] = [];
+    if (post.content && post.content.trim()) {
+      parts.push(post.content.trim());
+    }
+    if (post.attachments && post.attachments.length > 0) {
+      post.attachments.forEach((att) => {
+        if (att.type === "image" || !att.type) parts.push("📷 Photo");
+        else if (att.type === "video") parts.push("🎥 Vidéo");
+        else if (att.type === "document") parts.push(`📄 ${att.fileName || "Document PDF"}`);
+        else if (att.type === "audio") parts.push("🎵 Fichier Audio");
+      });
+    }
+    if (post.voiceNotes && post.voiceNotes.length > 0) {
+      parts.push("🎤 Note vocale");
+    }
+    if (post.codeSnippet) {
+      parts.push(`💻 Code (${post.codeSnippet.language || "Snippet"})`);
+    }
+    if (post.poll) {
+      parts.push(`📊 Sondage: ${post.poll.question}`);
+    }
+    return parts.join(" • ") || "Message épinglé";
+  };
+
+  // Helper: check if a user can edit a post based on time limit
+  const canUserModifyPost = (post: any, currentUser: any, limitMinutes: number): boolean => {
+    if (!currentUser || !post) return false;
+    if (checkIsAdmin(currentUser)) return true; // Admins can always edit
+    if (post.authorId !== currentUser.uid) return false; // Non-authors cannot modify
+
+    if (limitMinutes === -1) return true; // Unlimited limit
+
+    let createdMs = Date.now();
+    if (post.createdAt) {
+      if (typeof post.createdAt.toDate === "function") {
+        createdMs = post.createdAt.toDate().getTime();
+      } else if (post.createdAt.seconds) {
+        createdMs = post.createdAt.seconds * 1000;
+      } else if (typeof post.createdAt === "number") {
+        createdMs = post.createdAt;
+      } else if (typeof post.createdAt === "string") {
+        createdMs = new Date(post.createdAt).getTime();
+      }
+    }
+
+    const elapsedMinutes = (Date.now() - createdMs) / (1000 * 60);
+    return elapsedMinutes <= limitMinutes;
+  };
+
+  const formatLimitText = (limitMinutes: number): string => {
+    if (limitMinutes === -1) return "Illimité";
+    if (limitMinutes < 60) return `${limitMinutes} min`;
+    const hours = limitMinutes / 60;
+    if (hours < 24) return `${hours} h`;
+    const days = hours / 24;
+    return `${days} jour${days > 1 ? "s" : ""}`;
+  };
+
+  const showDeleteSuccess = (msg: string) => {
+    setDeleteToast(msg);
+    setTimeout(() => setDeleteToast(null), 3500);
+  };
+
+  const toggleSelectPost = (postId: string) => {
+    setSelectedPostIds((prev) =>
+      prev.includes(postId) ? prev.filter((id) => id !== postId) : [...prev, postId]
+    );
+  };
+
+  const enterSelectionModeWithPost = (postId: string) => {
+    setIsSelectionMode(true);
+    setSelectedPostIds((prev) => (prev.includes(postId) ? prev : [...prev, postId]));
+    setActiveContextMenuPostId(null);
+  };
+
+  const exitSelectionMode = () => {
+    setIsSelectionMode(false);
+    setSelectedPostIds([]);
+  };
+
+  // Delete message: opens the confirmation modal
+  const handleDeletePost = (postId: string) => {
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+    if (!canUserDeletePost(post, user)) {
+      alert("Vous n'avez pas l'autorisation de supprimer ce message.");
+      return;
+    }
+    setPostToDelete({ id: postId, isBatch: false, content: post.content || "" });
+    setActiveContextMenuPostId(null);
+  };
+
+  // Perform confirmed deletion (single or bulk)
+  const handleConfirmDelete = async () => {
+    if (!postToDelete) return;
+    setIsDeleting(true);
+    try {
+      if (postToDelete.isBatch) {
+        const ids = [...selectedPostIds];
+        await Promise.all(ids.map((id) => deleteDoc(doc(db, "community_posts", id))));
+        showDeleteSuccess(
+          ids.length > 1 ? `${ids.length} messages supprimés avec succès.` : "Message supprimé avec succès."
+        );
+        exitSelectionMode();
+      } else if (postToDelete.id) {
+        await deleteDoc(doc(db, "community_posts", postToDelete.id));
+        showDeleteSuccess("Message supprimé avec succès.");
+      }
+    } catch (err) {
+      console.error("Erreur lors de la suppression:", err);
+    } finally {
+      setIsDeleting(false);
+      setPostToDelete(null);
+      setActiveContextMenuPostId(null);
+    }
+  };
+
+  // Save edited message
+  const handleSaveEditPost = async () => {
+    if (!editingPostId || !editPostContent.trim()) return;
+    const post = posts.find((p) => p.id === editingPostId);
+    if (!post || !canUserModifyPost(post, user, messageEditDeleteLimitMinutes)) {
+      alert("Le délai d'autorisation de modification de ce message a expiré.");
+      return;
+    }
+    setIsSubmittingEdit(true);
+    try {
+      await updateDoc(doc(db, "community_posts", editingPostId), {
+        content: editPostContent.trim(),
+        isEdited: true,
+        editedAt: serverTimestamp()
+      });
+      setEditingPostId(null);
+      setEditPostContent("");
+    } catch (err) {
+      console.error("Error updating post content:", err);
+    } finally {
+      setIsSubmittingEdit(false);
+    }
+  };
+
+  // Pin / Unpin message
+  const handlePinPost = async (postId: string, isCurrentlyPinned: boolean) => {
+    try {
+      await updateDoc(doc(db, "community_posts", postId), {
+        isPinned: !isCurrentlyPinned
+      });
+      setActiveContextMenuPostId(null);
+    } catch (err) {
+      console.error("Error pinning post:", err);
+    }
+  };
+
+  // Send Spiritual points Gift
+  const handleSendSpiritualGift = async (recipientId: string) => {
+    if (!user) return;
+    if (recipientId === user.uid) return;
+    try {
+      const recRef = doc(db, "users", recipientId);
+      await updateDoc(recRef, {
+        points: (membersList.find((m) => m.id === recipientId)?.points || 0) + 50
+      });
+      alert(tLocal("giftSuccess"));
+      setSelectedProfileMember(null);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Run Code logic helper
+  const stripTypeScriptTypes = (code: string): string => {
+    let js = code;
+    js = js.replace(/enum\s+([A-Za-z_$][\w$]*)\s*\{([\s\S]*?)\}/g, (match, enumName, enumBody) => {
+      const lines = enumBody.split(",");
+      const entries: string[] = [];
+      let lastVal = 0;
+      lines.forEach((line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        const parts = trimmed.split("=");
+        const key = parts[0].trim();
+        if (!key) return;
+        let val: any = lastVal;
+        if (parts[1]) {
+          const rawVal = parts[1].trim();
+          const parsedVal = parseInt(rawVal);
+          if (!isNaN(parsedVal)) {
+            val = parsedVal;
+            lastVal = val + 1;
+          } else {
+            entries.push(`  "${key}": ${rawVal}`);
+            return;
+          }
+        } else {
+          lastVal++;
+        }
+        entries.push(`  "${key}": ${val},\n  "${val}": "${key}"`);
+      });
+      return `const ${enumName} = {\n${entries.join(",\n")}\n};`;
+    });
+    js = js.replace(/interface\s+[A-Za-z_$][\w$]*(?:\s+extends\s+[^{]+)?\s*\{[\s\S]*?\}/g, "");
+    js = js.replace(/type\s+[A-Za-z_$][\w$]*\s*=\s*[^;]+;/g, "");
+    js = js.replace(/\b(public|private|protected|readonly)\s+/g, "");
+    js = js.replace(/\s+as\s+[A-Za-z_$][\w$]*(?:\s*<[^>]+>)?(?:\s*\[\])?/g, "");
+    js = js.replace(/:\s*[A-Za-z_$][\w$]*(?:\s*<[^>]+>)?(?:\s*\[\])?(?=\s*(?:=|,|;|\)|{))/g, "");
+    js = js.replace(/\)\s*:\s*[A-Za-z_$][\w$]*(?:\s*<[^>]+>)?(?:\s*\[\])?(?=\s*\{)/g, ")");
+    return js;
+  };
+
+  const handleRunCompiler = async (postId: string, code: string, language: string) => {
+    setIsCompilingMap(prev => ({ ...prev, [postId]: true }));
+    let currentLogs = ["[Sandbox] Initializing Virtual Sandbox Machine...", `[Sandbox] Code Language: ${language.toUpperCase()}`];
+    setCompiledOutputs(prev => ({ ...prev, [postId]: currentLogs }));
+
+    await new Promise((r) => setTimeout(r, 600));
+
+    try {
+      if (language === "javascript" || language === "typescript") {
+        let codeToRun = code;
+        if (language === "typescript") {
+          codeToRun = stripTypeScriptTypes(code);
+        }
+
+        const logs: string[] = [];
+        const customConsole = {
+          log: (...args: any[]) => logs.push(args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ")),
+          error: (...args: any[]) => logs.push("[ERROR] " + args.map(String).join(" ")),
+          warn: (...args: any[]) => logs.push("[WARNING] " + args.map(String).join(" "))
+        };
+
+        const runFn = new Function("console", `
+          try {
+            ${codeToRun}
+          } catch(err) {
+            console.error(err.message);
+          }
+        `);
+
+        runFn(customConsole);
+        setCompiledOutputs(prev => ({ ...prev, [postId]: [...currentLogs, "[Sandbox] Sandbox Execution Finished.", ...logs] }));
+      } else if (language === "html") {
+        setHtmlPreviews(prev => ({ ...prev, [postId]: code }));
+        setCompilerTabMap(prev => ({ ...prev, [postId]: "preview" }));
+        setCompiledOutputs(prev => ({ ...prev, [postId]: [...currentLogs, "[Sandbox] Rendered in Preview tab successfully."] }));
+      } else {
+        // Python / SQL Simulation output
+        setCompiledOutputs(prev => ({ ...prev, [postId]: [...currentLogs, "[Mock Engine] Compiled and executed successfully on Asrar Virtual Environment.", "Output:", `> Guran_Zikr_Result: Success (Simulation Mode for Python/SQL)`] }));
+      }
+    } catch (e: any) {
+      setCompiledOutputs(prev => ({ ...prev, [postId]: [...currentLogs, `[Sandbox Error] ${e.message}`] }));
+    } finally {
+      setIsCompilingMap(prev => ({ ...prev, [postId]: false }));
+    }
+  };
+
+  // Filter and chronologically sort posts so the latest messages are always at the bottom
+  const filteredPosts = posts
+    .filter((p) => {
+      if (!chatSearchQuery) return true;
+      const contentMatch = p.content?.toLowerCase().includes(chatSearchQuery.toLowerCase());
+      const authorMatch = p.authorName?.toLowerCase().includes(chatSearchQuery.toLowerCase());
+      const snippetMatch = p.codeSnippet?.code?.toLowerCase().includes(chatSearchQuery.toLowerCase());
+      return contentMatch || authorMatch || snippetMatch;
+    })
+    .sort((a, b) => getPostTimestampMs(a) - getPostTimestampMs(b));
+
+  // Messages that the current user is permitted to delete
+  const selectablePosts = filteredPosts.filter((p) => canUserDeletePost(p, user));
+
+  const toggleSelectAll = () => {
+    const selectableIds = selectablePosts.map((p) => p.id);
+    const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedPostIds.includes(id));
+    if (allSelected) {
+      setSelectedPostIds([]);
+    } else {
+      setSelectedPostIds(selectableIds);
+    }
+  };
+
+  // Get color for user names based on string hash (Telegram name coloring)
+  const getNameColorClass = (name: string) => {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const colors = [
+      "text-red-500",
+      "text-green-500",
+      "text-blue-500",
+      "text-pink-500",
+      "text-purple-500",
+      "text-yellow-600",
+      "text-orange-500",
+      "text-teal-500",
+      "text-indigo-500"
+    ];
+    return colors[Math.abs(hash) % colors.length];
+  };
+
+  // Safe date parser to completely prevent "Invalid Date"
+  const parseDateSafe = (val: any): Date => {
+    if (!val) return new Date();
+    if (val instanceof Date) return isNaN(val.getTime()) ? new Date() : val;
+    if (typeof val?.toDate === "function") {
+      try {
+        const d = val.toDate();
+        if (!isNaN(d.getTime())) return d;
+      } catch (_) {}
+    }
+    if (typeof val?.seconds === "number") {
+      const d = new Date(val.seconds * 1000);
+      if (!isNaN(d.getTime())) return d;
+    }
+    if (typeof val?._seconds === "number") {
+      const d = new Date(val._seconds * 1000);
+      if (!isNaN(d.getTime())) return d;
+    }
+    if (typeof val === "number") {
+      const d = val < 10000000000 ? new Date(val * 1000) : new Date(val);
+      if (!isNaN(d.getTime())) return d;
+    }
+    if (typeof val === "string") {
+      const d = new Date(val);
+      if (!isNaN(d.getTime())) return d;
+      const num = Number(val);
+      if (!isNaN(num)) {
+        const dNum = num < 10000000000 ? new Date(num * 1000) : new Date(num);
+        if (!isNaN(dNum.getTime())) return dNum;
+      }
+    }
+    return new Date();
+  };
+
+  // Format timestamp safely as Telegram 24h format (e.g., 22:18)
+  const formatTime = (createdAt: any) => {
+    const date = parseDateSafe(createdAt);
+    try {
+      return date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    } catch (_) {
+      const hh = String(date.getHours()).padStart(2, "0");
+      const mm = String(date.getMinutes()).padStart(2, "0");
+      return `${hh}:${mm}`;
+    }
+  };
+
+  const formatDateLabel = (createdAt: any) => {
+    const date = parseDateSafe(createdAt);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    if (date.toDateString() === today.toDateString()) return "Aujourd'hui";
+    if (date.toDateString() === yesterday.toDateString()) return "Hier";
+    return date.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+  };
+
+  // Find the pinned message
+  const pinnedPost = posts.find(p => p.isPinned);
+
+  // Centralized robust Back Navigation for Community page
+  const handleCommunityBack = (e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    // 1. Close any open sub-views, drawers, modals, or view modes first
+    if (isAiModalOpen) {
+      setIsAiModalOpen(false);
+      return;
+    }
+    if (isDocViewerFullscreen) {
+      setIsDocViewerFullscreen(false);
+      if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+      return;
+    }
+    if (isSelectionMode) {
+      exitSelectionMode();
+      return;
+    }
+    if (docViewerFile) {
+      setDocViewerFile(null);
+      return;
+    }
+    if (lightboxImages && lightboxImages.length > 0) {
+      setLightboxImages([]);
+      return;
+    }
+    if (selectedProfileMember) {
+      setSelectedProfileMember(null);
+      return;
+    }
+    if (isCodeModalOpen) {
+      setIsCodeModalOpen(false);
+      return;
+    }
+    if (isPollModalOpen) {
+      setIsPollModalOpen(false);
+      return;
+    }
+    if (sidebarOpen) {
+      setSidebarOpen(false);
+      return;
+    }
+    if (showSearchInput) {
+      setShowSearchInput(false);
+      setChatSearchQuery("");
+      return;
+    }
+    if (showEmojiPicker) {
+      setShowEmojiPicker(false);
+      return;
+    }
+    if (isAttachMenuOpen) {
+      setIsAttachMenuOpen(false);
+      return;
+    }
+    if (isRecording) {
+      stopRecording();
+      return;
+    }
+    if (replyToPost) {
+      setReplyToPost(null);
+      return;
+    }
+    if (editingPostId) {
+      setEditingPostId(null);
+      setEditPostContent("");
+      return;
+    }
+
+    // 2. Try to pop previous route from internal app route stack (sessionStorage)
+    try {
+      const rawStack = sessionStorage.getItem('asrar_route_stack');
+      let stack: string[] = rawStack ? JSON.parse(rawStack) : [];
+      stack = stack.filter(Boolean);
+
+      while (
+        stack.length > 0 &&
+        (stack[stack.length - 1] === '/community' ||
+         stack[stack.length - 1].startsWith('/community?') ||
+         stack[stack.length - 1].startsWith('/community#'))
+      ) {
+        stack.pop();
+      }
+
+      if (stack.length > 0) {
+        const previousPath = stack.pop()!;
+        sessionStorage.setItem('asrar_route_stack', JSON.stringify(stack));
+        if (previousPath && previousPath !== '/community') {
+          navigate(previousPath);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('[CommunityBack] Error reading route stack:', err);
+    }
+
+    // 3. If user has internal history state (React Router session history index > 0)
+    const historyState = window.history.state;
+    if (historyState && typeof historyState.idx === 'number' && historyState.idx > 0) {
+      navigate(-1);
+      return;
+    }
+
+    // 4. Default guaranteed fallback: return directly to user dashboard
+    navigate('/user/dashboard');
+  };
+
+  // Connect mobile / Android hardware back button for open overlays & sub-views
+  const hasActiveInternalOverlay =
+    isAiModalOpen ||
+    isDocViewerFullscreen ||
+    isSelectionMode ||
+    !!docViewerFile ||
+    (lightboxImages && lightboxImages.length > 0) ||
+    !!selectedProfileMember ||
+    isCodeModalOpen ||
+    isPollModalOpen ||
+    sidebarOpen ||
+    showSearchInput ||
+    showEmojiPicker ||
+    isAttachMenuOpen ||
+    isRecording ||
+    !!replyToPost ||
+    !!editingPostId;
+
+  useBackButton(() => {
+    handleCommunityBack();
+  }, hasActiveInternalOverlay);
+
+  return (
+    <div className="w-full h-full flex-1 flex flex-col min-h-0 relative">
+      
+      {/* Telegram-specific styles */}
+      <style>{`
+        .telegram-chat-bg {
+          background-color: #8da58d;
+          background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%236e8b6e' fill-opacity='0.16' fill-rule='evenodd'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");
+        }
+        .dark .telegram-chat-bg {
+          background-color: #0e1621;
+          background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%2317212b' fill-opacity='0.45' fill-rule='evenodd'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");
+        }
+        .no-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+        .no-scrollbar {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+        .bubble-tail-left {
+          position: relative;
+        }
+        .bubble-tail-left::before {
+          content: "";
+          position: absolute;
+          bottom: 0;
+          left: -6px;
+          width: 8px;
+          height: 8px;
+          background-color: inherit;
+          clip-path: polygon(100% 0, 100% 100%, 0 100%);
+        }
+        .bubble-tail-right {
+          position: relative;
+        }
+        .bubble-tail-right::before {
+          content: "";
+          position: absolute;
+          bottom: 0;
+          right: -6px;
+          width: 8px;
+          height: 8px;
+          background-color: inherit;
+          clip-path: polygon(0 0, 0 100%, 100% 100%);
+        }
+      `}</style>
+
+      <div className="w-full flex-1 flex flex-col md:flex-row h-full min-h-0 bg-white dark:bg-[#111926] relative overflow-hidden m-0 p-0 border-0">
+        
+        {/* Left/Main Column: Telegram Chat Interface */}
+        <div className="flex-1 flex flex-col h-full min-h-0 relative">
+          
+          {/* Telegram Header */}
+          <div className="bg-white dark:bg-[#151f2d] border-b border-gray-150 dark:border-gray-800 px-2.5 sm:px-4 py-2 sm:py-2.5 flex items-center justify-between z-10 shrink-0 min-h-[54px]">
+            {isSelectionMode ? (
+              <div className="flex items-center justify-between w-full">
+                <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                  <button
+                    type="button"
+                    onClick={exitSelectionMode}
+                    className="p-1.5 sm:p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors cursor-pointer shrink-0"
+                    title="Annuler la sélection"
+                  >
+                    <X size={20} />
+                  </button>
+                  <div className="min-w-0">
+                    <span className="font-bold text-xs sm:text-sm text-gray-900 dark:text-white flex items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-white font-mono text-xs">
+                        {selectedPostIds.length}
+                      </span>
+                      sélectionné{selectedPostIds.length > 1 ? "s" : ""}
+                    </span>
+                    <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate hidden min-[440px]:block">
+                      {selectablePosts.length} message{selectablePosts.length > 1 ? "s" : ""} supprimable{selectablePosts.length > 1 ? "s" : ""}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={toggleSelectAll}
+                    className="px-2.5 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    {selectablePosts.length > 0 && selectablePosts.every((p) => selectedPostIds.includes(p.id))
+                      ? "Désélectionner"
+                      : "Tout cocher"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedPostIds.length === 0}
+                    onClick={() => setPostToDelete({ count: selectedPostIds.length, isBatch: true })}
+                    className={`flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all shadow-xs cursor-pointer ${
+                      selectedPostIds.length > 0
+                        ? "bg-red-600 hover:bg-red-700 text-white active:scale-95"
+                        : "bg-red-300 dark:bg-red-950/40 text-white/50 cursor-not-allowed"
+                    }`}
+                    title="Supprimer les messages sélectionnés"
+                  >
+                    <Trash2 size={15} />
+                    <span>Supprimer ({selectedPostIds.length})</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0">
+                  {/* Back Arrow button matching Telegram navigation */}
+                  <button
+                    type="button"
+                    onClick={handleCommunityBack}
+                    className="w-10 h-10 sm:w-11 sm:h-11 flex items-center justify-center text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 active:bg-black/10 dark:active:bg-white/20 active:scale-90 rounded-full transition-all cursor-pointer shrink-0 -ml-1 sm:ml-0 touch-manipulation z-20"
+                    title="Retour"
+                    aria-label="Retour au tableau de bord"
+                  >
+                    <ArrowLeft size={22} className="shrink-0" />
+                  </button>
+
+                  <div 
+                    onClick={() => setSidebarOpen(!sidebarOpen)}
+                    className="flex items-center gap-2 sm:gap-2.5 cursor-pointer group hover:opacity-90 transition-opacity min-w-0"
+                    title="Cliquer pour afficher/masquer les infos du groupe"
+                  >
+                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center text-white font-extrabold shadow-sm relative shrink-0 text-base sm:text-lg">
+                      🕌
+                      <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-[#151f2d] rounded-full animate-pulse" />
+                    </div>
+                    <div className="text-left min-w-0">
+                      <h3 className="font-extrabold text-xs sm:text-sm md:text-base text-gray-900 dark:text-white flex items-center gap-1.5 truncate">
+                        {tLocal("communityTitle")}
+                        <Sparkles size={13} className="text-amber-500 animate-pulse shrink-0" />
+                      </h3>
+                      <p className="text-[11px] sm:text-xs text-gray-500 dark:text-gray-400 truncate">
+                        {membersList.length} {tLocal("membersSuffix")} • <span className="text-emerald-500 dark:text-emerald-400 font-semibold">{membersList.filter(m => m.isOnline).length} {tLocal("onlineSuffix")}</span>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1 sm:gap-1.5 relative">
+                  <button
+                    onClick={() => setIsAiModalOpen(true)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-semibold text-xs transition-all cursor-pointer shadow-xs border border-emerald-500/20"
+                    title="IA Asrar (Plein Écran)"
+                  >
+                    <Sparkles size={14} className="text-emerald-500 animate-pulse" />
+                    <span className="hidden min-[480px]:inline">IA Asrar</span>
+                  </button>
+                  <button
+                    onClick={focusMessageInput}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-semibold text-xs transition-all cursor-pointer shadow-xs border border-emerald-500/20"
+                    title="Écrire un message"
+                  >
+                    <PenSquare size={15} />
+                    <span className="hidden min-[480px]:inline">Écrire</span>
+                  </button>
+                  <button
+                    onClick={() => setIsSelectionMode(true)}
+                    className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-full transition-all cursor-pointer"
+                    title="Sélectionner des messages pour supprimer"
+                  >
+                    <CheckSquare size={18} />
+                  </button>
+                  <button
+                    onClick={() => setShowSearchInput(!showSearchInput)}
+                    className={`p-2 rounded-full transition-all cursor-pointer ${
+                      showSearchInput ? "bg-emerald-500/10 text-emerald-600" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5"
+                    }`}
+                    title="Rechercher"
+                  >
+                    <Search size={18} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveSidebarTab("info");
+                      setSidebarOpen(!sidebarOpen);
+                    }}
+                    className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-full transition-all cursor-pointer"
+                    title={tLocal("groupInfo")}
+                  >
+                    <Info size={18} />
+                  </button>
+                  <button
+                    onClick={() => setShowFloatingMenu(!showFloatingMenu)}
+                    className={`p-2 rounded-full transition-all cursor-pointer ${
+                      showFloatingMenu ? "bg-emerald-500/15 text-emerald-600 dark:text-teal-400" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5"
+                    }`}
+                    title="Options et sections"
+                  >
+                    <MoreVertical size={18} />
+                  </button>
+
+                  {/* Telegram Header Dropdown Menu */}
+                  <AnimatePresence>
+                    {showFloatingMenu && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-40" 
+                          onClick={() => setShowFloatingMenu(false)} 
+                        />
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.95, y: -4 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.95, y: -4 }}
+                          className="absolute right-0 top-11 z-50 w-56 bg-white dark:bg-[#1e2a38] rounded-2xl shadow-2xl border border-gray-200/80 dark:border-gray-700/80 py-1.5 max-h-[calc(100dvh-4rem)] overflow-y-auto no-scrollbar backdrop-blur-md"
+                        >
+                          <button
+                            onClick={() => {
+                              setShowFloatingMenu(false);
+                              focusMessageInput();
+                            }}
+                            className="w-full px-4 py-2.5 text-left text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/30 flex items-center gap-3 cursor-pointer transition-colors border-b border-gray-100 dark:border-gray-800"
+                          >
+                            <PenSquare size={16} className="text-emerald-500" />
+                            <span>Écrire un message</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowFloatingMenu(false);
+                              setIsSelectionMode(true);
+                            }}
+                            className="w-full px-4 py-2.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800/80 flex items-center gap-3 cursor-pointer transition-colors"
+                          >
+                            <CheckSquare size={16} className="text-emerald-500" />
+                            <span>Sélectionner des messages</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setActiveSidebarTab("info");
+                              setSidebarOpen(true);
+                              setShowFloatingMenu(false);
+                            }}
+                            className="w-full px-4 py-2.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800/80 flex items-center gap-3 cursor-pointer transition-colors"
+                          >
+                            <Info size={16} className="text-emerald-500" />
+                            <span>Infos du groupe</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setActiveSidebarTab("members");
+                              setSidebarOpen(true);
+                              setShowFloatingMenu(false);
+                            }}
+                            className="w-full px-4 py-2.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800/80 flex items-center gap-3 cursor-pointer transition-colors"
+                          >
+                            <Users size={16} className="text-blue-500" />
+                            <span>Membres ({membersList.length})</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setActiveSidebarTab("media");
+                              setSidebarOpen(true);
+                              setShowFloatingMenu(false);
+                            }}
+                            className="w-full px-4 py-2.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800/80 flex items-center gap-3 cursor-pointer transition-colors"
+                          >
+                            <ImageIcon size={16} className="text-amber-500" />
+                            <span>Médias & Fichiers</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setIsAiModalOpen(true);
+                              setShowFloatingMenu(false);
+                            }}
+                            className="w-full px-4 py-2.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800/80 flex items-center gap-3 cursor-pointer transition-colors border-t border-gray-100 dark:border-gray-700/50"
+                          >
+                            <Sparkles size={16} className="text-teal-500 animate-pulse" />
+                            <span className="font-bold text-teal-600 dark:text-teal-400">Assistant IA Asrar (Plein Écran)</span>
+                          </button>
+                        </motion.div>
+                      </>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Search Bar transition */}
+          <AnimatePresence>
+            {showSearchInput && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="bg-gray-50 dark:bg-[#141b27] border-b border-gray-150 dark:border-gray-800/60 px-4 py-2 shrink-0 flex items-center gap-2"
+              >
+                <Search size={14} className="text-gray-400" />
+                <input
+                  type="text"
+                  placeholder={tLocal("searchPlaceholder")}
+                  value={chatSearchQuery}
+                  onChange={(e) => setChatSearchQuery(e.target.value)}
+                  className="w-full bg-transparent text-xs text-gray-800 dark:text-white focus:outline-none placeholder-gray-400"
+                />
+                {chatSearchQuery && (
+                  <button onClick={() => setChatSearchQuery("")} className="text-gray-400 hover:text-gray-600">
+                    <X size={14} />
+                  </button>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Sticky Pinned Message Banner */}
+          {pinnedPost && (
+            <div className="bg-white/95 dark:bg-[#151f2d]/95 backdrop-blur-sm border-b border-emerald-500/20 px-4 py-2 flex items-center justify-between gap-3 text-left z-10 shrink-0 relative">
+              <div className="flex items-start gap-2 min-w-0">
+                <Pin size={12} className="text-emerald-500 mt-1 shrink-0 rotate-45" />
+                <div className="min-w-0">
+                  <span className="block text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest">
+                    {tLocal("pinnedMessage")}
+                  </span>
+                  <button
+                    onClick={() => {
+                      document.getElementById(`msg-${pinnedPost.id}`)?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                    className="block text-xs text-gray-700 dark:text-gray-200 truncate hover:underline cursor-pointer font-semibold"
+                  >
+                    <span className="font-black text-gray-900 dark:text-white">{pinnedPost.authorName}:</span> {getPinnedPostSummary(pinnedPost)}
+                  </button>
+                </div>
+              </div>
+              <button
+                onClick={() => handlePinPost(pinnedPost.id, true)}
+                className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded"
+                title="Détacher le message"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
+          {/* Chat Messages scroll area */}
+          <div
+            ref={chatContainerRef}
+            onScroll={handleChatScroll}
+            className="flex-1 overflow-y-auto px-2.5 sm:px-4 py-3 sm:py-4 space-y-3 telegram-chat-bg relative no-scrollbar"
+          >
+            {filteredPosts.length === 0 ? (
+              <div className="h-full min-h-[320px] flex flex-col items-center justify-center text-center p-4 sm:p-6">
+                <div className="max-w-md w-full bg-white/95 dark:bg-[#15202e]/95 backdrop-blur-md rounded-3xl p-6 sm:p-8 shadow-2xl border border-white/60 dark:border-gray-750 flex flex-col items-center animate-fadeIn">
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-500/15 to-teal-500/25 dark:from-emerald-950/70 dark:to-teal-900/50 border border-emerald-500/20 dark:border-emerald-700/50 flex items-center justify-center shadow-sm mb-4 text-3xl">
+                    📿
+                  </div>
+                  <h3 className="text-base sm:text-lg font-black text-gray-900 dark:text-white mb-1.5">
+                    {lang === "ha" ? "Barka da zuwa Rukunin" : lang === "en" ? "Welcome to the Group" : "Bienvenue dans le Groupe"}
+                  </h3>
+                  <p className="text-sm font-bold text-emerald-700 dark:text-teal-300 mb-2">
+                    {tLocal("noMessages")}
+                  </p>
+                  <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed max-w-xs">
+                    {lang === "ha" 
+                      ? "Aika saƙon farko don raba hikima, addu'o'i ko tambayoyi tare da mambobi."
+                      : lang === "en"
+                      ? "Send the first message to share wisdom, prayers or questions with members."
+                      : "Envoyez le premier message pour partager sagesses, wirds ou poser vos questions aux membres."}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              filteredPosts.map((post, idx) => {
+                const isOurPost = post.authorId === user?.uid;
+                const showAvatar = !isOurPost;
+                
+                // Day changes separator check
+                const prevPost = idx > 0 ? filteredPosts[idx - 1] : null;
+                const showDateHeader = !prevPost || (
+                  parseDateSafe(post.createdAt).toDateString() !== parseDateSafe(prevPost?.createdAt).toDateString()
+                );
+
+                const authorMember = membersList.find((m) => m.id === post.authorId || m.name === post.authorName);
+                const rx = post.reactions || {};
+                const currentReactionCount = (rx.like?.length || 0) + (rx.love?.length || 0) + (rx.haha?.length || 0) + (rx.wow?.length || 0) + (rx.sad?.length || 0) + (rx.angry?.length || 0);
+                const canDeleteThisPost = canUserDeletePost(post, user);
+                const isSelected = selectedPostIds.includes(post.id);
+
+                return (
+                  <div key={post.id ? `community-post-${post.id}-${idx}` : `community-post-${idx}`} className="space-y-3">
+                    {/* Centered Date Separator */}
+                    {showDateHeader && (
+                      <div className="flex justify-center my-3 sticky top-2 z-10 pointer-events-none">
+                        <span className="bg-[#415a41]/80 dark:bg-[#1a2330]/85 backdrop-blur-md text-white text-[11px] font-semibold px-3 py-0.5 rounded-full shadow-xs tracking-wide">
+                          {formatDateLabel(post.createdAt)}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Chat Bubble Layout Row */}
+                    <div
+                      id={`msg-${post.id}`}
+                      className={`flex items-start gap-2 group ${isOurPost ? "ml-auto flex-row-reverse text-right" : "mr-auto text-left"} ${
+                        post.codeSnippet || (post.content && (post.content.includes("[Partage de la Communauté") || post.content.includes("|") || post.content.includes("DÉTAILS DU CALCUL")))
+                          ? "w-full max-w-[96%] sm:max-w-[85%] min-w-0"
+                          : "max-w-[88%] sm:max-w-[78%] min-w-0"
+                      }`}
+                    >
+                      {/* Selection checkbox in selection mode */}
+                      {isSelectionMode && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (canDeleteThisPost) {
+                              toggleSelectPost(post.id);
+                            }
+                          }}
+                          disabled={!canDeleteThisPost}
+                          className={`w-6 h-6 rounded-full flex items-center justify-center transition-all cursor-pointer shrink-0 mt-2 ${
+                            isSelected
+                              ? "bg-emerald-500 text-white shadow-xs scale-110"
+                              : canDeleteThisPost
+                              ? "border-2 border-gray-400 dark:border-gray-500 bg-white dark:bg-gray-800 hover:border-emerald-500 hover:scale-105"
+                              : "border-2 border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800/40 opacity-40 cursor-not-allowed"
+                          }`}
+                          title={
+                            canDeleteThisPost
+                              ? isSelected
+                                ? "Désélectionner"
+                                : "Sélectionner ce message"
+                              : "Vous ne pouvez pas supprimer ce message"
+                          }
+                        >
+                          {isSelected && <Check size={13} className="stroke-[3]" />}
+                        </button>
+                      )}
+
+                      {/* Avatar */}
+                      {showAvatar && (
+                        <button
+                          onClick={() => {
+                            if (authorMember) {
+                              setSelectedProfileMember(authorMember);
+                            }
+                          }}
+                          className="w-8 h-8 rounded-full bg-white dark:bg-gray-800 shadow-sm flex items-center justify-center text-sm border border-gray-150 dark:border-gray-700/80 hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer mt-0.5"
+                        >
+                          {authorMember?.avatar || "📿"}
+                        </button>
+                      )}
+
+                      {/* Message Content Wrapper (Column) */}
+                      <div className={`flex flex-col min-w-0 max-w-full ${isOurPost ? "items-end" : "items-start"}`}>
+                        {/* Bubble Inner Container */}
+                        <div
+                          onClick={() => {
+                            if (isSelectionMode && canDeleteThisPost) {
+                              toggleSelectPost(post.id);
+                            }
+                          }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setContextMenuCoords({ x: e.clientX, y: e.clientY });
+                            setActiveContextMenuPostId(post.id);
+                          }}
+                          className={`px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl shadow-sm relative min-w-0 max-w-full overflow-hidden transition-all ${
+                            isSelected
+                              ? "ring-3 ring-emerald-500 dark:ring-emerald-400 ring-offset-2 dark:ring-offset-[#0e1621] shadow-md"
+                              : ""
+                          } ${
+                            isSelectionMode && canDeleteThisPost ? "cursor-pointer" : ""
+                          } ${
+                            post.codeSnippet || (post.content && (post.content.includes("[Partage de la Communauté") || post.content.includes("|") || post.content.includes("DÉTAILS DU CALCUL")))
+                              ? "w-full"
+                              : ""
+                          } ${
+                            isOurPost
+                              ? "bg-[#d9fdd3] text-gray-900 dark:bg-[#2b5278] dark:text-white rounded-br-xs bubble-tail-right"
+                              : "bg-white text-gray-900 dark:bg-[#182533] dark:text-white rounded-bl-xs bubble-tail-left border border-gray-100 dark:border-gray-800/80"
+                          }`}
+                        >
+                          {/* Pinned post badge inside bubble */}
+                          {post.isPinned && (
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-600 dark:text-amber-400 mb-1.5 select-none bg-amber-500/10 px-2.5 py-0.5 rounded-md w-fit border border-amber-500/20">
+                              <Pin size={12} className="rotate-45 shrink-0" />
+                              <span>Épinglé</span>
+                            </div>
+                          )}
+                          {/* Sender's Unique Colored Name Header */}
+                          {!isOurPost && (
+                            <div className="flex items-center gap-2 pb-1 justify-between">
+                              <span
+                                onClick={() => authorMember && setSelectedProfileMember(authorMember)}
+                                className={`text-[13px] sm:text-sm font-bold hover:underline cursor-pointer ${getNameColorClass(post.authorName)}`}
+                              >
+                                {post.authorName}
+                              </span>
+                              {authorMember?.role === "admin" && (
+                                <span className="bg-red-500/10 text-red-600 dark:text-red-400 text-[9.5px] font-black uppercase px-2 py-0.5 rounded-md tracking-wider border border-red-500/20">
+                                  admin
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Reply Header Preview within Bubble */}
+                          {post.replyTo && (
+                            <div className="bg-black/5 dark:bg-white/5 border-l-3 border-emerald-500 dark:border-teal-400 px-2.5 py-1.5 rounded-r-lg mb-2 text-left text-xs max-w-full">
+                              <span className="block font-bold text-xs text-emerald-600 dark:text-teal-300">
+                                {post.replyTo.authorName}
+                              </span>
+                              <p className="text-gray-600 dark:text-gray-300 text-xs truncate mt-0.5">
+                                {post.replyTo.content}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Main Text Content */}
+                          {post.content && (
+                            <CommunityPostContent
+                              content={post.content}
+                              khatimGrid={(post as any).khatimGrid || (post as any).khatimGridRows || (post as any).khatimGridJson || (post as any).gridData}
+                              isOurPost={isOurPost}
+                            />
+                          )}
+
+                          {/* Media Attachments (Flawless Image, Video, Audio) */}
+                          {post.attachments && post.attachments.length > 0 && (
+                            <div className="grid grid-cols-1 gap-3 mt-2">
+                              {post.attachments.map((att, i) => {
+                                if (att.type === "video") {
+                                  return (
+                                    <div key={`att-vid-${post.id}-${i}`} className="rounded-2xl overflow-hidden max-h-[280px] bg-black/15 dark:bg-black/40 border border-gray-150 dark:border-gray-800">
+                                      <video
+                                        src={att.url}
+                                        controls
+                                        className="w-full h-auto max-h-[280px] block"
+                                      />
+                                    </div>
+                                  );
+                                } else if (att.type === "audio") {
+                                  return (
+                                    <div key={`att-aud-${post.id}-${i}`} className="flex items-center gap-2.5 bg-black/10 dark:bg-white/5 p-2.5 rounded-xl w-full max-w-[280px] select-none border border-gray-100 dark:border-gray-800">
+                                      <audio src={att.url} controls className="w-full text-xs" />
+                                    </div>
+                                  );
+                                } else if (
+                                  att.type === "document" ||
+                                  att.type === "file" ||
+                                  (() => {
+                                    const n = (att.fileName || "").toLowerCase();
+                                    const u = (att.url || "").toLowerCase();
+                                    return (
+                                      n.endsWith(".pdf") ||
+                                      n.endsWith(".doc") ||
+                                      n.endsWith(".docx") ||
+                                      n.endsWith(".xls") ||
+                                      n.endsWith(".xlsx") ||
+                                      n.endsWith(".csv") ||
+                                      n.endsWith(".txt") ||
+                                      n.endsWith(".odt") ||
+                                      n.endsWith(".rtf") ||
+                                      n.endsWith(".zip") ||
+                                      n.endsWith(".rar") ||
+                                      u.includes(".pdf") ||
+                                      u.startsWith("data:application/pdf")
+                                    );
+                                  })()
+                                ) {
+                                  const nameLower = (att.fileName || "").toLowerCase();
+                                  const isPdf = nameLower.endsWith(".pdf") || att.url?.includes(".pdf") || att.url?.startsWith("data:application/pdf");
+                                  const isWord = nameLower.endsWith(".doc") || nameLower.endsWith(".docx");
+                                  const isExcel = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx") || nameLower.endsWith(".csv");
+                                  const isZip = nameLower.endsWith(".zip") || nameLower.endsWith(".rar");
+                                  const iconColor = isPdf ? "text-red-500 bg-red-500/10 dark:bg-red-500/20" : isWord ? "text-blue-500 bg-blue-500/10 dark:bg-blue-500/20" : isExcel ? "text-emerald-500 bg-emerald-500/10 dark:bg-emerald-500/20" : isZip ? "text-amber-500 bg-amber-500/10 dark:bg-amber-500/20" : "text-amber-600 bg-amber-500/10 dark:bg-amber-500/20";
+                                  const badgeText = isPdf ? "PDF" : isWord ? "DOC" : isExcel ? "EXCEL" : isZip ? "ZIP" : "DOC";
+
+                                  return (
+                                    <div
+                                      key={`att-doc-${post.id}-${i}`}
+                                      onClick={() => handleOpenDocViewer(att)}
+                                      className="flex items-center gap-2.5 bg-black/10 dark:bg-white/5 hover:bg-black/15 dark:hover:bg-white/10 p-2.5 rounded-2xl text-left border border-gray-100 dark:border-gray-800 transition-all w-full max-w-[340px] cursor-pointer group shadow-sm"
+                                    >
+                                      <div className={`p-2.5 rounded-xl shrink-0 group-hover:scale-105 transition-transform ${iconColor}`}>
+                                        <FileText size={20} />
+                                      </div>
+                                      <div className="flex-1 min-w-0 pr-1">
+                                        <div className="flex items-center gap-1.5">
+                                          <p className="text-xs font-bold truncate text-gray-900 dark:text-white group-hover:text-emerald-500 transition-colors">
+                                            {att.fileName || (isPdf ? "Document.pdf" : "Document")}
+                                          </p>
+                                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-gray-600 dark:text-gray-300 shrink-0">
+                                            {badgeText}
+                                          </span>
+                                        </div>
+                                        <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium">
+                                          {att.fileSize || "Fichier"}
+                                        </p>
+                                      </div>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <div
+                                          className="px-2.5 py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 rounded-xl font-bold text-[11px] flex items-center gap-1 transition-colors shadow-xs"
+                                          title="Ouvrir dans le lecteur de documents"
+                                        >
+                                          <Eye size={14} />
+                                          <span>Consulter</span>
+                                        </div>
+                                        <a
+                                          href={att.url.includes("/api/community/file/") ? `${att.url}/download` : att.url}
+                                          download={att.fileName || "document"}
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="p-1.5 text-gray-400 hover:text-emerald-500 dark:hover:text-emerald-400 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-colors"
+                                          title="Télécharger directement"
+                                        >
+                                          <Download size={14} />
+                                        </a>
+                                      </div>
+                                    </div>
+                                  );
+                                } else {
+                                  // Default to Image (High Resolution)
+                                  return (
+                                    <div
+                                      key={`att-img-wrapper-${post.id}-${i}`}
+                                      className="relative group/hd-img inline-block rounded-xl overflow-hidden shadow-sm"
+                                    >
+                                      <img
+                                        src={att.url}
+                                        alt="Attachment"
+                                        onClick={() => {
+                                          const imagesOnly = post.attachments!.filter(a => a.type === "image" || !a.type).map(a => a.url);
+                                          const imgIndex = imagesOnly.indexOf(att.url);
+                                          setLightboxImages(imagesOnly);
+                                          setLightboxIndex(imgIndex >= 0 ? imgIndex : 0);
+                                        }}
+                                        className="rounded-xl max-h-[240px] max-w-full object-cover cursor-pointer hover:opacity-95 transition-opacity block"
+                                      />
+                                      {/* HD Badge */}
+                                      <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-black/60 backdrop-blur-xs rounded-md text-[9px] font-bold text-white flex items-center gap-1 opacity-90 pointer-events-none">
+                                        <Sparkles size={10} className="text-amber-300" />
+                                        <span>HD</span>
+                                      </div>
+                                      {/* Direct Download in High Resolution */}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          downloadImageHighRes(att.url, att.fileName || `asrarhub-image-hd-${post.id}-${i}.png`);
+                                          setDeleteToast("Téléchargement HD lancé !");
+                                          setTimeout(() => setDeleteToast(null), 2500);
+                                        }}
+                                        className="absolute bottom-2 right-2 flex items-center gap-1 px-2 py-1 bg-black/75 hover:bg-emerald-600 text-white rounded-lg backdrop-blur-md opacity-90 sm:opacity-0 group-hover/hd-img:opacity-100 transition-all cursor-pointer shadow-md text-[10px] font-bold"
+                                        title="Télécharger cette image en Haute Résolution"
+                                      >
+                                        <Download size={12} />
+                                        <span>HD</span>
+                                      </button>
+                                    </div>
+                                  );
+                                }
+                              })}
+                            </div>
+                          )}
+
+                          {/* Voice notes */}
+                          {post.voiceNotes && post.voiceNotes.map((audio, i) => {
+                            const isPlayingThis = playingAudioKey === `${post.id}-${i}`;
+                            return (
+                              <div key={`vn-${post.id}-${i}`} className="flex items-center gap-3 bg-black/10 dark:bg-white/5 p-2.5 rounded-2xl mt-2 w-[240px] sm:w-[270px] select-none">
+                                <button
+                                  onClick={() => handlePlayVoiceNote(audio, post.id, i)}
+                                  className={`w-9 h-9 rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 shadow-xs ${
+                                    isPlayingThis ? "bg-amber-500 text-white animate-pulse" : "bg-emerald-500 text-white"
+                                  }`}
+                                  title={isPlayingThis ? "Pause" : "Play"}
+                                >
+                                  {isPlayingThis ? <Pause size={15} /> : <Play size={15} className="ml-0.5" />}
+                                </button>
+                                <div className="flex-1">
+                                  <span className="block text-xs font-bold text-gray-700 dark:text-gray-200">Message Vocal</span>
+                                  <div className="h-2 bg-gray-300 dark:bg-gray-700 rounded-full w-full overflow-hidden mt-1.5">
+                                    <div className={`h-full ${isPlayingThis ? "bg-amber-400 animate-pulse w-full" : "bg-emerald-400 w-2/3"} transition-all duration-300`} />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+
+                          {/* Code Compiler Block snippet */}
+                          {post.codeSnippet && (() => {
+                            const isHTML = post.codeSnippet.language === "html";
+                            const currentView = activeCodeViewMap[post.id] || ((post.codeSnippet as any).showPreviewDirectly ? "preview" : "code");
+                            
+                            return (
+                              <div className="bg-[#1e1e1e] rounded-2xl border border-gray-800/80 mt-3 overflow-hidden text-left shadow-lg w-full min-w-0">
+                                {/* Browser header tab bar */}
+                                <div className="bg-[#2d2d2d] px-3.5 py-2.5 flex items-center justify-between text-xs text-gray-300 border-b border-gray-900/60 select-none">
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    {/* macOS action dots */}
+                                    <div className="flex gap-1.5 shrink-0">
+                                      <span className="w-2.5 h-2.5 rounded-full bg-red-500/90" />
+                                      <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/90" />
+                                      <span className="w-2.5 h-2.5 rounded-full bg-green-500/90" />
+                                    </div>
+                                    <span className="ml-1.5 font-mono text-[11px] text-gray-400 font-bold truncate flex items-center gap-1">
+                                      📄 {isHTML ? "index.html" : `code.${post.codeSnippet.language === "javascript" ? "js" : post.codeSnippet.language === "typescript" ? "ts" : post.codeSnippet.language === "python" ? "py" : "sql"}`}
+                                    </span>
+                                  </div>
+                                  
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    {isHTML && (
+                                      <div className="flex bg-black/50 rounded-lg p-0.5 border border-gray-800">
+                                        <button
+                                          onClick={() => setActiveCodeViewMap(prev => ({ ...prev, [post.id]: "preview" }))}
+                                          className={`px-2.5 py-0.5 text-[9px] font-black uppercase rounded-md transition-all cursor-pointer ${
+                                            currentView === "preview"
+                                              ? "bg-emerald-600 text-white font-extrabold shadow-sm"
+                                              : "text-gray-400 hover:text-white"
+                                          }`}
+                                        >
+                                          Aperçu
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            if (user?.subscriptionTier !== "premium" && user?.subscriptionTier !== "pro" && user?.role !== "admin") {
+                                              alert("Option Premium : Seuls les membres Premium peuvent voir le code source d'un aperçu.");
+                                              return;
+                                            }
+                                            setActiveCodeViewMap(prev => ({ ...prev, [post.id]: "code" }))
+                                          }}
+                                          className={`px-2.5 py-0.5 text-[9px] font-black uppercase rounded-md transition-all cursor-pointer flex items-center gap-0.5 ${
+                                            currentView === "code"
+                                              ? "bg-emerald-600 text-white font-extrabold shadow-sm"
+                                              : "text-gray-400 hover:text-white"
+                                          }`}
+                                        >
+                                          Code {(user?.subscriptionTier !== "premium" && user?.subscriptionTier !== "pro" && user?.role !== "admin") && "🔒"}
+                                        </button>
+                                      </div>
+                                    )}
+                                    
+                                    <button
+                                      onClick={() => {
+                                        if (isHTML && user?.subscriptionTier !== "premium" && user?.subscriptionTier !== "pro" && user?.role !== "admin") {
+                                          alert("Option Premium : Seuls les membres Premium peuvent copier le code source d'un aperçu.");
+                                          return;
+                                        }
+                                        navigator.clipboard.writeText(post.codeSnippet!.code);
+                                        alert(tLocal("copied"));
+                                      }}
+                                      className="p-1 text-gray-500 hover:text-white rounded transition-colors"
+                                      title="Copier le code"
+                                    >
+                                      <Copy size={12} />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Preview Frame or Source Code Codebox */}
+                                {isHTML && currentView === "preview" ? (
+                                  <div className="bg-white p-0 relative transition-all duration-300 w-full overflow-hidden">
+                                    <iframe
+                                      title={`Live Preview - ${post.id}`}
+                                      srcDoc={post.codeSnippet.code}
+                                      className="w-full min-h-[380px] h-auto border-none block"
+                                      sandbox="allow-scripts"
+                                    />
+                                  </div>
+                                ) : (
+                                  <div className="p-3 font-mono w-full min-w-0 overflow-hidden relative">
+                                    {isHTML && user?.subscriptionTier !== "premium" && user?.subscriptionTier !== "pro" && user?.role !== "admin" ? (
+                                      <div className="flex flex-col items-center justify-center py-12 px-4 text-center bg-gray-950/80 rounded-2xl border border-dashed border-gray-800/60 my-2">
+                                        <span className="text-3xl mb-3 animate-pulse">👑</span>
+                                        <h4 className="text-xs font-black text-white uppercase tracking-wider">Source Code Verrouillée</h4>
+                                        <p className="text-[10px] text-gray-400 max-w-[280px] mt-1 leading-relaxed">
+                                          Le code source de cet aperçu interactif est réservé aux membres Premium d'AsrarHub.
+                                        </p>
+                                        <button
+                                          onClick={() => navigate("/profile")}
+                                          className="mt-4 px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-600 text-white text-[9px] font-black uppercase rounded-xl shadow-md cursor-pointer hover:scale-105 active:scale-95 transition-all"
+                                        >
+                                          Devenir Premium
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <pre className="text-xs text-green-400 overflow-x-auto max-h-[220px] no-scrollbar w-full max-w-full">
+                                          <code>{post.codeSnippet.code}</code>
+                                        </pre>
+
+                                        {/* Compilation controller panel for non-html or when testing in code view */}
+                                        <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-gray-800/80">
+                                          <button
+                                            onClick={() => handleRunCompiler(post.id, post.codeSnippet!.code, post.codeSnippet!.language)}
+                                            disabled={isCompilingMap[post.id]}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-[10px] rounded-lg cursor-pointer transition-all active:scale-95 uppercase tracking-wider"
+                                          >
+                                            {isCompilingMap[post.id] ? (
+                                              <>
+                                                <div className="w-2.5 h-2.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                                                <span>{tLocal("compiling")}</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <Play size={10} />
+                                                <span>{tLocal("runCodeBtn")}</span>
+                                              </>
+                                            )}
+                                          </button>
+                                        </div>
+
+                                        {/* Code Compilation Output logs */}
+                                        {compiledOutputs[post.id] && (
+                                          <div className="mt-3 bg-black/40 border border-gray-800/80 rounded-lg p-2.5 font-mono text-[10.5px]">
+                                            <div className="flex items-center justify-between border-b border-gray-800/60 pb-1.5 mb-1.5">
+                                              <span className="text-gray-500 uppercase tracking-widest text-[9px] font-extrabold">Console</span>
+                                            </div>
+                                            <div className="space-y-1 max-h-[120px] overflow-y-auto no-scrollbar text-gray-300">
+                                              {compiledOutputs[post.id].map((log, i) => (
+                                                <div key={`log-${post.id}-${i}`}>{log}</div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+
+                          {/* Interactive Poll Component Block */}
+                          {post.poll && (
+                            <div className="bg-gray-50 dark:bg-black/30 rounded-2xl p-3.5 border border-gray-150 dark:border-gray-800 text-left mt-2 w-full">
+                              <h4 className="font-extrabold text-sm sm:text-base text-gray-900 dark:text-white mb-3">
+                                📊 {post.poll.question}
+                              </h4>
+                              <div className="space-y-2.5">
+                                {post.poll.options.map((opt, optIdx) => {
+                                  const totalVotes = post.poll!.options.reduce((sum, o) => sum + (o.votes?.length || 0), 0);
+                                  const vCount = opt.votes ? opt.votes.length : 0;
+                                  const pct = totalVotes > 0 ? Math.round((vCount / totalVotes) * 100) : 0;
+                                  const userHasVotedThis = opt.votes?.includes(user?.uid || "");
+
+                                  return (
+                                    <button
+                                      key={`poll-opt-${opt.id}-${optIdx}`}
+                                      onClick={() => handlePollVote(post.id, opt.id)}
+                                      className={`w-full text-left relative p-3 rounded-xl border text-sm font-bold transition-all overflow-hidden flex items-center justify-between cursor-pointer ${
+                                        userHasVotedThis
+                                          ? "bg-emerald-500/10 border-emerald-500 text-emerald-700 dark:text-emerald-400"
+                                          : "bg-white dark:bg-[#1f293d] border-gray-150 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+                                      }`}
+                                    >
+                                      <div className="absolute inset-y-0 left-0 bg-emerald-500/10 dark:bg-emerald-500/20 pointer-events-none transition-all duration-500" style={{ width: `${pct}%` }} />
+                                      <span className="relative z-10 flex items-center gap-2 truncate">
+                                        {userHasVotedThis && <CheckCircle size={14} className="text-emerald-500 shrink-0" />}
+                                        {opt.text}
+                                      </span>
+                                      <span className="relative z-10 text-xs text-gray-400 shrink-0 font-bold">
+                                        {pct}% ({vCount})
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <div className="text-xs text-gray-400 mt-2.5 text-right font-medium">
+                                {post.poll.options.reduce((sum, o) => sum + (o.votes?.length || 0), 0)} {tLocal("votesCount")}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Bottom Right status details inside bubble */}
+                          <div className="flex items-center gap-1.5 justify-end mt-1.5 text-[11px] text-gray-500 dark:text-gray-300 font-medium select-none">
+                            {post.isEdited && <span className="italic text-[10px] text-gray-400 dark:text-gray-400">(modifié)</span>}
+                            <span>{formatTime(post.createdAt)}</span>
+                            {isOurPost && <span className="text-emerald-600 dark:text-sky-300 ml-0.5 font-bold">✓✓</span>}
+                          </div>
+
+                          {/* Chat Action Buttons (Delete & Options) */}
+                          {!isSelectionMode && (
+                            <div className="absolute top-2 right-2 opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 z-10">
+                              {canDeleteThisPost && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeletePost(post.id);
+                                  }}
+                                  className="p-1.5 bg-black/10 dark:bg-white/10 hover:bg-red-600 hover:text-white text-gray-500 dark:text-white rounded-lg cursor-pointer transition-colors shadow-xs"
+                                  title="Supprimer ce message"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  setContextMenuCoords({ x: rect.left, y: rect.top });
+                                  setActiveContextMenuPostId(post.id);
+                                }}
+                                className="p-1.5 bg-black/10 dark:bg-white/10 hover:bg-black/20 text-gray-500 dark:text-white rounded-lg cursor-pointer transition-colors"
+                                title="Options du message"
+                              >
+                                <MoreHorizontal size={14} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Reaction indicators attached under bubble */}
+                        {currentReactionCount > 0 && (
+                          <div className={`flex items-center gap-1 bg-white dark:bg-gray-800 border border-gray-150 dark:border-gray-700/80 px-2.5 py-1 rounded-full shadow-sm text-xs mt-1 z-10 ${isOurPost ? "mr-1" : "ml-1"}`}>
+                            {rx.like?.length > 0 && <span>👍</span>}
+                            {rx.love?.length > 0 && <span>❤️</span>}
+                            {rx.haha?.length > 0 && <span>😂</span>}
+                            {rx.wow?.length > 0 && <span>😮</span>}
+                            {rx.sad?.length > 0 && <span>😢</span>}
+                            {rx.angry?.length > 0 && <span>😡</span>}
+                            <span className="font-mono text-gray-500 font-extrabold ml-0.5">{currentReactionCount}</span>
+                          </div>
+                        )}
+
+                        {/* Telegram-style discussion & comment pill */}
+                        <div className={`flex items-center gap-2 mt-1.5 select-none ${isOurPost ? "justify-end" : "justify-start"}`}>
+                          <button
+                            onClick={() => setActiveCommentPostId((prev) => (prev === post.id ? null : post.id))}
+                            className={`inline-flex items-center gap-1.5 text-xs font-semibold py-1 px-3 rounded-full transition-all cursor-pointer ${
+                              activeCommentPostId === post.id
+                                ? "bg-[#2481cc] text-white shadow-xs"
+                                : "bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-gray-700 dark:text-gray-200"
+                            }`}
+                          >
+                            <MessageSquare size={13} className={activeCommentPostId === post.id ? "fill-white" : ""} />
+                            <span>{activeCommentPostId === post.id ? tLocal("hideComments") : tLocal("commentsAndReplies")}</span>
+                          </button>
+
+                          {user?.uid !== post.authorId && (
+                            <button
+                              onClick={() => {
+                                setDmRecipient({ id: post.authorId, name: post.authorName });
+                                setIsDMOpen(true);
+                              }}
+                              title={tLocal("privateMessageDirect")}
+                              className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-black/5 dark:bg-white/10 hover:bg-emerald-500/20 text-gray-500 hover:text-emerald-600 dark:text-gray-300 transition-colors cursor-pointer"
+                            >
+                              <Send size={12} />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Inline Post Comments Thread */}
+                        {activeCommentPostId === post.id && (
+                          <div className="mt-2 w-full max-w-xl animate-fadeIn">
+                            <PostComments postId={post.id} />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+
+            {/* Reliable bottom scroll anchor */}
+            <div ref={messagesEndRef} id="chat-messages-bottom" className="h-1 w-full shrink-0" />
+          </div>
+
+          {/* Reply Context Bar */}
+          {replyToPost && (
+            <div className="bg-gray-50 dark:bg-[#131d2a] border-t border-gray-100 dark:border-gray-800 px-4 py-2 flex items-center justify-between shrink-0 text-left">
+              <div className="flex items-center gap-2 text-xs border-l-2 border-emerald-500 pl-2">
+                <CornerUpLeft size={14} className="text-emerald-500" />
+                <div>
+                  <span className="block font-black text-gray-900 dark:text-white">
+                    {tLocal("replyingTo")} {replyToPost.authorName}
+                  </span>
+                  <p className="text-gray-400 truncate max-w-[400px]">
+                    {replyToPost.content}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setReplyToPost(null)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
+          {/* Draft Preview & Review Area (Fais que l'utilisateur édite et vérifie les textes avant de le publier) */}
+          {(messageText.trim() || recordedAudio || attachedMedias.length > 0) && (
+            <div className="mx-4 my-2 p-3 bg-emerald-500/5 dark:bg-teal-500/5 border border-emerald-500/10 dark:border-teal-500/10 rounded-2xl text-left shadow-sm">
+              <div className="flex items-center justify-between pb-1.5 border-b border-gray-150 dark:border-gray-800/60 mb-2">
+                <span className="text-[10px] font-black text-emerald-600 dark:text-teal-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                  </span>
+                  Aperçu de votre publication (Vérification avant envoi)
+                </span>
+                <span className="text-[9px] text-gray-400 dark:text-gray-500">
+                  Modifiez votre texte ou écoutez votre voix ci-dessous
+                </span>
+              </div>
+              
+              <div className="space-y-2.5">
+                {/* Editable Text Area to refine text draft directly */}
+                {messageText.trim() && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[9px] font-bold uppercase text-gray-500 dark:text-gray-400">Message écrit :</label>
+                      <span className="text-[9px] text-emerald-600 dark:text-teal-400 font-medium">Prêt pour envoi</span>
+                    </div>
+                    <textarea
+                      value={messageText}
+                      onChange={(e) => setMessageText(e.target.value)}
+                      placeholder="Écrivez ou modifiez votre texte..."
+                      className="w-full bg-white dark:bg-[#151f2d] border border-gray-200 dark:border-gray-800/80 rounded-xl p-3 text-[15px] sm:text-base leading-relaxed text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 resize-none min-h-[56px] max-h-[140px] shadow-sm font-sans"
+                    />
+                  </div>
+                )}
+
+                {/* Voice Note Draft Preview with Playback */}
+                {recordedAudio && (
+                  <div className="flex items-center justify-between gap-3 bg-amber-500/10 dark:bg-amber-500/5 p-2.5 rounded-xl border border-amber-500/20">
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => handlePlayVoiceNote(recordedAudio, "draft", 0)}
+                        className={`p-2 rounded-full hover:scale-105 active:scale-95 transition-all cursor-pointer ${
+                          playingAudioKey === "draft-0" ? "bg-amber-500 text-white animate-pulse" : "bg-emerald-500 text-white"
+                        }`}
+                        title={playingAudioKey === "draft-0" ? "Pause" : "Écouter l'enregistrement"}
+                      >
+                        {playingAudioKey === "draft-0" ? <Pause size={12} /> : <Play size={12} />}
+                      </button>
+                      <div className="text-left">
+                        <div className="flex items-center gap-2">
+                          <span className="block text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase">Message Vocal (Aperçu)</span>
+                          {proVoiceAmplifier && (
+                            <span className="inline-flex items-center gap-1 text-[8px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 dark:bg-emerald-500/20 px-1.5 py-0.5 rounded-md border border-emerald-500/20">
+                              <Sparkles size={9} className="animate-pulse" />
+                              Amplificateur Pro HD
+                            </span>
+                          )}
+                        </div>
+                        <span className="block text-[9px] text-gray-500 dark:text-gray-400 mt-0.5">Enregistrement traité avec réduction de bruit et gain boost HD.</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecordedAudio(null);
+                        if (playingAudioKey === "draft-0") {
+                          if (currentlyPlayingAudioRef.current) {
+                            currentlyPlayingAudioRef.current.pause();
+                            currentlyPlayingAudioRef.current = null;
+                          }
+                          setPlayingAudioKey(null);
+                        }
+                      }}
+                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg transition-colors cursor-pointer"
+                      title="Supprimer l'enregistrement vocal"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                )}
+                
+                {/* Media Files List and Discard Options */}
+                {attachedMedias.length > 0 && (
+                  <div className="space-y-1">
+                    <label className="block text-[9px] font-bold uppercase text-gray-400">Pièces jointes ({attachedMedias.length}) :</label>
+                    <div className="flex flex-wrap gap-2 pt-0.5">
+                      {attachedMedias.map((media, idx) => (
+                        <div key={`attached-media-preview-${media.url || idx}-${idx}`} className="relative group rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800">
+                          {media.isUploading ? (
+                            <div className="w-20 h-12 bg-amber-500/10 dark:bg-amber-500/20 flex flex-col items-center justify-center gap-1 p-1 text-center">
+                              <Loader2 size={15} className="text-amber-500 animate-spin" />
+                              <span className="text-[8px] font-bold text-amber-600 dark:text-amber-400 leading-tight">Envoi...</span>
+                            </div>
+                          ) : media.type === "image" ? (
+                            <img src={media.url} className="w-16 h-12 object-cover" />
+                          ) : media.type === "video" ? (
+                            <div className="w-16 h-12 bg-black flex items-center justify-center text-[9px] text-white font-bold">🎥 VIDÉO</div>
+                          ) : media.type === "document" ? (
+                            <div className="w-24 h-12 bg-amber-500/10 dark:bg-amber-500/20 flex items-center gap-1.5 px-2 text-amber-600 dark:text-amber-400">
+                              <FileText size={18} className="shrink-0" />
+                              <div className="min-w-0">
+                                <span className="block text-[9px] font-extrabold truncate max-w-[55px] text-gray-800 dark:text-gray-200" title={media.fileName}>
+                                  {media.fileName || "Document"}
+                                </span>
+                                <span className="block text-[8px] text-gray-500 dark:text-gray-400">
+                                  {media.fileSize || "Prêt"}
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="w-16 h-12 bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-[9px] text-emerald-600 dark:text-teal-400 font-bold">🎵 AUDIO</div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setAttachedMedias((prev) => prev.filter((_, i) => i !== idx))}
+                            className="absolute top-0.5 right-0.5 bg-red-500 text-white rounded-full p-0.5 hover:bg-red-600 transition-colors shadow-sm cursor-pointer z-10"
+                            style={{ width: "16px", height: "16px" }}
+                          >
+                            <X size={10} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Bottom input area layout */}
+          <div className="bg-[#f0f4f8]/50 dark:bg-[#0b111c] px-3 sm:px-4 py-2 sm:py-2.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-center gap-2 shrink-0 z-10 border-t border-gray-150 dark:border-gray-800/80">
+            {isSelectionMode ? (
+              <div className="flex-1 flex items-center justify-between gap-3 bg-white dark:bg-[#182533] rounded-2xl px-4 py-2.5 border border-emerald-500/30 dark:border-emerald-500/20 shadow-sm">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs sm:text-sm font-bold text-gray-800 dark:text-gray-100 truncate">
+                    {selectedPostIds.length} sélectionné{selectedPostIds.length > 1 ? "s" : ""}
+                  </span>
+                  <span className="text-xs text-gray-400 hidden min-[400px]:inline">
+                    ({selectablePosts.length} supprimable{selectablePosts.length > 1 ? "s" : ""})
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={exitSelectionMode}
+                    className="px-3 py-1.5 rounded-xl border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-xs font-semibold text-gray-700 dark:text-gray-300 cursor-pointer transition-colors"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedPostIds.length === 0}
+                    onClick={() => setPostToDelete({ count: selectedPostIds.length, isBatch: true })}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${
+                      selectedPostIds.length > 0
+                        ? "bg-red-600 hover:bg-red-700 text-white active:scale-95"
+                        : "bg-red-300 dark:bg-red-950/40 text-white/50 cursor-not-allowed"
+                    }`}
+                  >
+                    <Trash2 size={14} />
+                    <span>Supprimer ({selectedPostIds.length})</span>
+                  </button>
+                </div>
+              </div>
+            ) : !user ? (
+              <div className="flex-1 flex items-center justify-between gap-3 bg-white dark:bg-[#182533] rounded-3xl px-3.5 sm:px-4 py-2 border border-emerald-500/30 dark:border-emerald-500/20 shadow-xs">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                    <PenSquare size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="block text-xs font-bold text-gray-800 dark:text-gray-200 truncate">
+                      Écrire dans la communauté
+                    </span>
+                    <span className="block text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                      Connectez-vous pour envoyer un message ou participer aux discussions
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAuthModal(true)}
+                  className="px-3 sm:px-4 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all active:scale-95 shrink-0 cursor-pointer"
+                >
+                  Se connecter
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Main Rounded Input Bar (includes Smile, Input Field, Attachments/Code/Polls) */}
+                <div className="flex-1 flex items-center gap-1.5 bg-white dark:bg-[#182533] rounded-3xl px-3 py-1.5 border border-gray-200/50 dark:border-gray-800/80 shadow-sm">
+                  
+                  {/* Smile Emoji Icon & Complete Emoji Picker */}
+                  <div className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowEmojiPicker((prev) => !prev)}
+                      className={`p-1.5 rounded-full transition-colors cursor-pointer ${
+                        showEmojiPicker
+                          ? "text-emerald-500 bg-emerald-500/10 dark:bg-teal-400/20"
+                          : "text-gray-400 hover:text-emerald-500 dark:hover:text-teal-400"
+                      }`}
+                      title="Sélecteur d'emojis complet (Smileys, Spirituels, Gestes, Cœurs...)"
+                    >
+                      <Smile size={20} />
+                    </button>
+
+                    <EmojiPickerPopover
+                      isOpen={showEmojiPicker}
+                      onClose={() => setShowEmojiPicker(false)}
+                      onSelectEmoji={(emoji) => {
+                        setMessageText((prev) => prev + emoji);
+                        if (messageInputRef.current) {
+                          messageInputRef.current.focus();
+                        }
+                      }}
+                      anchorDirection="up"
+                    />
+                  </div>
+
+                  {/* Main Text Message Input Field or Animated Recording Interface */}
+                  <form onSubmit={handleSendMessage} className="flex-1 min-w-0">
+                    {isRecording ? (
+                      <div className="flex-1 flex items-center justify-between gap-2 py-1 select-none">
+                        {/* Live recording dot, soundwaves & timer */}
+                        <div className="flex items-center gap-2 text-red-500 font-bold text-xs sm:text-sm shrink-0">
+                          <span className="relative flex h-2.5 w-2.5 shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                          </span>
+
+                          {/* Animated Sound Waves */}
+                          <div className="flex items-center gap-0.5 h-3.5 px-0.5">
+                            <span className="w-0.5 h-2 bg-red-500 rounded-full animate-pulse" style={{ animationDelay: '0ms' }} />
+                            <span className="w-0.5 h-3.5 bg-red-500 rounded-full animate-pulse" style={{ animationDelay: '150ms' }} />
+                            <span className="w-0.5 h-4 bg-red-500 rounded-full animate-pulse" style={{ animationDelay: '300ms' }} />
+                            <span className="w-0.5 h-2.5 bg-red-500 rounded-full animate-pulse" style={{ animationDelay: '450ms' }} />
+                            <span className="w-0.5 h-3 bg-red-500 rounded-full animate-pulse" style={{ animationDelay: '200ms' }} />
+                          </div>
+
+                          <span className="font-mono font-bold text-xs tracking-wide">
+                            {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, '0')}
+                          </span>
+                        </div>
+
+                        {/* Quick controls: Pro Amplifier toggle, Cancel (Trash) & Stop (Preview) */}
+                        <div className="flex items-center gap-1.5 ml-auto">
+                          <button
+                            type="button"
+                            onClick={() => setProVoiceAmplifier(!proVoiceAmplifier)}
+                            className={`hidden sm:flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                              proVoiceAmplifier
+                                ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                                : "bg-gray-100 dark:bg-gray-800 text-gray-400 border border-transparent"
+                            }`}
+                            title={proVoiceAmplifier ? "Amplificateur Pro HD ACTIF (Réduction du bruit, EQ & Gain Boost)" : "Cliquer pour activer l'amplificateur Pro"}
+                          >
+                            <Sparkles size={11} className={proVoiceAmplifier ? "text-emerald-500 animate-pulse" : ""} />
+                            <span>Studio HD {proVoiceAmplifier ? "ON" : "OFF"}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsRecording(false);
+                              if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+                              if (mediaRecorderRef.current) {
+                                try {
+                                  mediaRecorderRef.current.stop();
+                                } catch (_) {}
+                              }
+                              mediaRecorderRef.current = null;
+                              setRecordedAudio(null);
+                            }}
+                            className="flex items-center gap-1 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 px-2 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                            title="Annuler l'enregistrement"
+                          >
+                            <Trash2 size={14} />
+                            <span className="hidden sm:inline uppercase text-[10px]">Annuler</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={stopRecording}
+                            className="flex items-center gap-1 bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30 px-2 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                            title="Arrêter et écouter l'aperçu"
+                          >
+                            <Square size={12} className="fill-current" />
+                            <span className="text-[10px] uppercase">Aperçu</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center w-full">
+                        <input
+                          ref={messageInputRef}
+                          type="text"
+                          value={messageText}
+                          onChange={(e) => setMessageText(e.target.value)}
+                          placeholder={tLocal("msgPlaceholder")}
+                          className="w-full bg-transparent border-none text-[15px] sm:text-base py-2 text-gray-900 dark:text-white focus:outline-none focus:ring-0 placeholder-gray-400"
+                        />
+                        {messageText.trim() && (
+                          <button
+                            type="submit"
+                            className="p-1.5 text-emerald-600 dark:text-teal-400 hover:text-emerald-700 dark:hover:text-teal-300 transition-colors cursor-pointer bg-emerald-500/10 dark:bg-teal-400/20 rounded-full flex items-center justify-center shrink-0 ml-1"
+                            title={tLocal("sendMsg")}
+                          >
+                            <Send size={15} className="ml-0.5" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </form>
+
+              {/* Display total attached media indicator */}
+              {attachedMedias.length > 0 && (
+                <div className="flex gap-1.5 overflow-x-auto max-w-[150px] no-scrollbar shrink-0 select-none bg-black/5 dark:bg-white/5 p-1 rounded-xl">
+                  {attachedMedias.map((media, idx) => (
+                    <div key={`attached-media-bar-${media.url || idx}-${idx}`} className="relative shrink-0">
+                      {media.isUploading ? (
+                        <div className="w-7 h-7 rounded-lg bg-amber-500/20 flex items-center justify-center">
+                          <Loader2 size={12} className="text-amber-500 animate-spin text-amber-600" />
+                        </div>
+                      ) : media.type === "image" ? (
+                        <img src={media.url} className="w-7 h-7 rounded-lg object-cover" />
+                      ) : media.type === "video" ? (
+                        <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-xs font-bold">🎥</div>
+                      ) : media.type === "audio" ? (
+                        <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-xs font-bold">🎵</div>
+                      ) : (
+                        <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center text-xs font-bold" title={media.fileName}>📄</div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setAttachedMedias((prev) => prev.filter((_, i) => i !== idx))}
+                        className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 flex items-center justify-center cursor-pointer hover:bg-red-600 transition-colors z-10"
+                        style={{ width: "12px", height: "12px" }}
+                      >
+                        <X size={8} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Attachment Button & Animated Telegram Attachment Popover */}
+              {!isRecording && (
+                <div className="relative" ref={attachMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsAttachMenuOpen(!isAttachMenuOpen)}
+                    className={`p-1.5 transition-all cursor-pointer rounded-full ${
+                      isAttachMenuOpen
+                        ? "text-emerald-500 bg-emerald-500/10 dark:text-teal-400 dark:bg-teal-400/20 rotate-45"
+                        : "text-gray-400 hover:text-emerald-500 dark:hover:text-teal-400"
+                    }`}
+                    title={tLocal("attachMenuTitle")}
+                  >
+                    <Paperclip size={20} />
+                  </button>
+
+                  {/* Telegram Attachment Popup Menu */}
+                  <AnimatePresence>
+                    {isAttachMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 15, scale: 0.92 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 15, scale: 0.92 }}
+                        transition={{ type: "spring", stiffness: 450, damping: 25 }}
+                        className="absolute bottom-12 right-0 sm:-right-8 z-50 bg-white/95 dark:bg-[#182533]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-200/80 dark:border-gray-700/80 p-3 w-72 sm:w-80 max-h-[calc(100dvh-5.5rem)] overflow-y-auto no-scrollbar max-w-[calc(100vw-1.5rem)]"
+                      >
+                        <div className="flex items-center justify-between pb-2 mb-2 border-b border-gray-100 dark:border-gray-800">
+                          <span className="text-[11px] font-black text-gray-700 dark:text-gray-200 uppercase tracking-wider flex items-center gap-1.5">
+                            <Paperclip size={13} className="text-emerald-500" />
+                            {tLocal("attachMenuTitle")}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIsAttachMenuOpen(false)}
+                            className="p-1 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2">
+                          {/* 1. Photo / Galerie */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAttachMenuOpen(false);
+                              document.getElementById("hidden-image-uploader")?.click();
+                            }}
+                            className="flex flex-col items-center justify-center p-2 rounded-xl hover:bg-emerald-500/10 dark:hover:bg-emerald-500/20 transition-all group cursor-pointer"
+                          >
+                            <div className="w-10 h-10 rounded-full bg-blue-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                              <ImageIcon size={18} />
+                            </div>
+                            <span className="text-[10px] font-bold text-gray-700 dark:text-gray-200 mt-1.5 text-center leading-tight">
+                              {tLocal("attachGallery")}
+                            </span>
+                          </button>
+
+                          {/* 2. Vidéo */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAttachMenuOpen(false);
+                              document.getElementById("hidden-video-uploader")?.click();
+                            }}
+                            className="flex flex-col items-center justify-center p-2 rounded-xl hover:bg-emerald-500/10 dark:hover:bg-emerald-500/20 transition-all group cursor-pointer"
+                          >
+                            <div className="w-10 h-10 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                              <VideoIcon size={18} />
+                            </div>
+                            <span className="text-[10px] font-bold text-gray-700 dark:text-gray-200 mt-1.5 text-center leading-tight">
+                              {tLocal("attachVideo")}
+                            </span>
+                          </button>
+
+                          {/* 3. Document / Fichier */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAttachMenuOpen(false);
+                              document.getElementById("hidden-doc-uploader")?.click();
+                            }}
+                            className="flex flex-col items-center justify-center p-2 rounded-xl hover:bg-emerald-500/10 dark:hover:bg-emerald-500/20 transition-all group cursor-pointer"
+                          >
+                            <div className="w-10 h-10 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                              <FileText size={18} />
+                            </div>
+                            <span className="text-[10px] font-bold text-gray-700 dark:text-gray-200 mt-1.5 text-center leading-tight">
+                              {tLocal("attachDocument")}
+                            </span>
+                          </button>
+
+                          {/* 4. Audio */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAttachMenuOpen(false);
+                              document.getElementById("hidden-audio-uploader")?.click();
+                            }}
+                            className="flex flex-col items-center justify-center p-2 rounded-xl hover:bg-emerald-500/10 dark:hover:bg-emerald-500/20 transition-all group cursor-pointer"
+                          >
+                            <div className="w-10 h-10 rounded-full bg-purple-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                              <Music size={18} />
+                            </div>
+                            <span className="text-[10px] font-bold text-gray-700 dark:text-gray-200 mt-1.5 text-center leading-tight">
+                              {tLocal("attachAudio")}
+                            </span>
+                          </button>
+
+                          {/* 5. Sondage (Poll) */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAttachMenuOpen(false);
+                              setIsPollModalOpen(true);
+                            }}
+                            className="flex flex-col items-center justify-center p-2 rounded-xl hover:bg-emerald-500/10 dark:hover:bg-emerald-500/20 transition-all group cursor-pointer"
+                          >
+                            <div className="w-10 h-10 rounded-full bg-amber-600 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                              <Vote size={18} />
+                            </div>
+                            <span className="text-[10px] font-bold text-gray-700 dark:text-gray-200 mt-1.5 text-center leading-tight">
+                              {tLocal("attachPoll")}
+                            </span>
+                          </button>
+
+                          {/* 6. Code Snippet */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAttachMenuOpen(false);
+                              if (!codeSharingEnabled && user?.role !== "admin") {
+                                alert("Le partage de code a été temporairement désactivé par l'administrateur.");
+                                return;
+                              }
+                              setIsCodeModalOpen(true);
+                            }}
+                            className="flex flex-col items-center justify-center p-2 rounded-xl hover:bg-emerald-500/10 dark:hover:bg-emerald-500/20 transition-all group cursor-pointer"
+                          >
+                            <div className="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                              <CodeIcon size={18} />
+                            </div>
+                            <span className="text-[10px] font-bold text-gray-700 dark:text-gray-200 mt-1.5 text-center leading-tight">
+                              {tLocal("attachCode")}
+                            </span>
+                          </button>
+
+                          {/* 7. Spiritual Location */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAttachMenuOpen(false);
+                              setMessageText((prev) => prev ? `${prev} 📍 [Position: ${user?.country || 'Sénégal'}]` : `📍 [Position: ${user?.country || 'Sénégal'}]`);
+                            }}
+                            className="flex flex-row items-center justify-center gap-2 p-2 rounded-xl bg-cyan-500/10 dark:bg-cyan-500/20 border border-cyan-500/20 hover:bg-cyan-500/20 transition-all group cursor-pointer col-span-3 mt-1"
+                          >
+                            <div className="w-6 h-6 rounded-full bg-cyan-500 text-white flex items-center justify-center shadow-sm">
+                              <MapPin size={13} />
+                            </div>
+                            <span className="text-[11px] font-bold text-cyan-700 dark:text-cyan-300 truncate">
+                              {tLocal("attachLocation")} ({user?.country || "Sénégal"})
+                            </span>
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* Hidden File Inputs for Each Media Type */}
+                  <input
+                    id="hidden-image-uploader"
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    onChange={(e) => handleMediaAttach(e, "image")}
+                    className="hidden"
+                  />
+                  <input
+                    id="hidden-video-uploader"
+                    type="file"
+                    multiple
+                    accept="video/*"
+                    onChange={(e) => handleMediaAttach(e, "video")}
+                    className="hidden"
+                  />
+                  <input
+                    id="hidden-doc-uploader"
+                    type="file"
+                    multiple
+                    accept=".pdf,.doc,.docx,.txt,.zip,.rar,.xlsx,.csv"
+                    onChange={(e) => handleMediaAttach(e, "document")}
+                    className="hidden"
+                  />
+                  <input
+                    id="hidden-audio-uploader"
+                    type="file"
+                    multiple
+                    accept="audio/*"
+                    onChange={(e) => handleMediaAttach(e, "audio")}
+                    className="hidden"
+                  />
+                  <input
+                    id="hidden-media-uploader"
+                    type="file"
+                    multiple
+                    accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
+                    onChange={handleMediaAttach}
+                    className="hidden"
+                  />
+                </div>
+              )}
+
+              {/* Code Creator Quick Icon Button */}
+              {!isRecording && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!codeSharingEnabled && user?.role !== "admin") {
+                      alert("Le partage de code a été temporairement désactivé par l'administrateur.");
+                      return;
+                    }
+                    setIsCodeModalOpen(true);
+                  }}
+                  className={`p-1.5 transition-colors cursor-pointer relative ${
+                    !codeSharingEnabled && user?.role !== "admin"
+                      ? "text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                      : "text-gray-400 hover:text-emerald-500 dark:hover:text-teal-400"
+                  }`}
+                  title={!codeSharingEnabled && user?.role !== "admin" ? "Partage de code désactivé" : tLocal("shareCodeTitle")}
+                >
+                  <CodeIcon size={20} />
+                  {!codeSharingEnabled && user?.role !== "admin" && <span className="absolute top-0 right-0 text-[8px]">🔒</span>}
+                </button>
+              )}
+
+              {/* Poll Creator Quick Icon Button */}
+              {!isRecording && (
+                <button
+                  type="button"
+                  onClick={() => setIsPollModalOpen(true)}
+                  className="p-1.5 text-gray-400 hover:text-emerald-500 dark:hover:text-teal-400 transition-colors cursor-pointer"
+                  title={tLocal("createPollTitle")}
+                >
+                  <Vote size={20} />
+                </button>
+              )}
+            </div>
+
+            {/* Circular Send / Voice Note Action Button outside the pill */}
+            {isRecording ? (
+              <button
+                type="button"
+                onClick={stopAndSendRecording}
+                className="w-11 h-11 bg-[#2481cc] hover:bg-[#2071b3] text-white rounded-full flex items-center justify-center shadow-md shadow-blue-500/20 active:scale-95 cursor-pointer transition-all shrink-0"
+                title={tLocal("stopAndSend")}
+              >
+                <Send size={18} className="ml-0.5" />
+              </button>
+            ) : messageText.trim() || attachedMedias.length > 0 || recordedAudio ? (
+              <button
+                type="button"
+                disabled={isUploadingMedia || attachedMedias.some((m) => m.isUploading)}
+                onClick={() => handleSendMessage()}
+                className={`w-11 h-11 text-white rounded-full flex items-center justify-center shadow-md shadow-blue-500/15 active:scale-95 transition-all shrink-0 ${
+                  isUploadingMedia || attachedMedias.some((m) => m.isUploading)
+                    ? "bg-gray-400 cursor-not-allowed opacity-80"
+                    : "bg-[#2481cc] hover:bg-[#2071b3] cursor-pointer"
+                }`}
+                title={isUploadingMedia || attachedMedias.some((m) => m.isUploading) ? "Téléversement du fichier en cours..." : tLocal("sendMsg")}
+              >
+                {isUploadingMedia || attachedMedias.some((m) => m.isUploading) ? (
+                  <Loader2 size={18} className="animate-spin text-white" />
+                ) : (
+                  <Send size={18} className="ml-0.5" />
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={startRecording}
+                className="w-11 h-11 bg-[#2481cc] hover:bg-[#2071b3] text-white rounded-full flex items-center justify-center shadow-md shadow-blue-500/15 active:scale-95 cursor-pointer transition-all shrink-0"
+                title={tLocal("voiceRecord")}
+              >
+                <Mic size={18} />
+              </button>
+            )}
+              </>
+            )}
+          </div>
+
+          {/* Telegram Scroll-To-Bottom Floating Button */}
+          <AnimatePresence>
+            {isScrolledUp && (
+              <motion.button
+                initial={{ opacity: 0, scale: 0.8, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.8, y: 10 }}
+                onClick={() => scrollToBottom(true)}
+                className="absolute bottom-20 right-4 z-20 w-10 h-10 rounded-full bg-white/95 dark:bg-[#1f2c3d]/95 backdrop-blur-md shadow-lg border border-gray-200/80 dark:border-gray-700/80 flex items-center justify-center text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#253549] transition-all cursor-pointer group"
+                title="Défiler vers le bas"
+              >
+                <ChevronDown size={20} className="group-hover:translate-y-0.5 transition-transform" />
+              </motion.button>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Sidebar Column: Group Details & Online Members */}
+        {sidebarOpen && (
+          <div 
+            onClick={() => setSidebarOpen(false)}
+            className="fixed inset-0 top-[60px] sm:top-[68px] bottom-0 z-[45] md:relative md:top-auto md:bottom-auto md:inset-auto md:z-auto bg-black/60 md:bg-transparent backdrop-blur-xs md:backdrop-blur-none flex justify-end pb-[env(safe-area-inset-bottom)]"
+          >
+            <div 
+              onClick={(e) => e.stopPropagation()}
+              className="w-[85vw] sm:w-80 md:w-80 bg-white dark:bg-[#141b27] border-l border-gray-100 dark:border-gray-800/80 flex flex-col h-full shrink-0 shadow-2xl md:shadow-none relative"
+            >
+              
+              {/* Mobile Drawer Header */}
+              <div className="flex md:hidden items-center justify-between p-3 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-[#111926] shrink-0">
+                <span className="font-extrabold text-xs text-gray-800 dark:text-gray-200 uppercase tracking-wider flex items-center gap-1.5">
+                  <LayoutGrid size={14} className="text-emerald-500" />
+                  {activeSidebarTab === "info" && "Infos du Groupe"}
+                  {activeSidebarTab === "members" && "Membres"}
+                  {activeSidebarTab === "media" && "Médias"}
+                  {activeSidebarTab === "ai" && "IA Asrar"}
+                </span>
+                <button
+                  onClick={() => setSidebarOpen(false)}
+                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Sidebar Tabs switcher */}
+              <div className="grid grid-cols-4 bg-gray-50 dark:bg-[#111926] p-1 border-b border-gray-100 dark:border-gray-800/80 shrink-0">
+                <button
+                  onClick={() => setActiveSidebarTab("info")}
+                  className={`py-2 text-[9px] sm:text-[10px] font-black uppercase rounded-xl tracking-tighter sm:tracking-wider transition-all cursor-pointer flex items-center justify-center text-center ${
+                    activeSidebarTab === "info" ? "bg-white dark:bg-[#151f2d] text-emerald-600 dark:text-teal-400 shadow-sm" : "text-gray-400"
+                  }`}
+                >
+                  INFOS
+                </button>
+                <button
+                  onClick={() => setActiveSidebarTab("members")}
+                  className={`py-2 text-[9px] sm:text-[10px] font-black uppercase rounded-xl tracking-tighter sm:tracking-wider transition-all cursor-pointer flex items-center justify-center text-center ${
+                    activeSidebarTab === "members" ? "bg-white dark:bg-[#151f2d] text-emerald-600 dark:text-teal-400 shadow-sm" : "text-gray-400"
+                  }`}
+                >
+                  MEMBRES
+                </button>
+                <button
+                  onClick={() => setActiveSidebarTab("media")}
+                  className={`py-2 text-[9px] sm:text-[10px] font-black uppercase rounded-xl tracking-tighter sm:tracking-wider transition-all cursor-pointer flex items-center justify-center text-center ${
+                    activeSidebarTab === "media" ? "bg-white dark:bg-[#151f2d] text-emerald-600 dark:text-teal-400 shadow-sm" : "text-gray-400"
+                  }`}
+                >
+                  MÉDIAS
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveSidebarTab("ai");
+                    setIsAiModalOpen(true);
+                  }}
+                  className={`py-2 text-[9px] sm:text-[10px] font-black uppercase rounded-xl tracking-tighter sm:tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
+                    activeSidebarTab === "ai" ? "bg-white dark:bg-[#151f2d] text-emerald-600 dark:text-teal-400 shadow-sm" : "text-gray-400"
+                  }`}
+                >
+                  <Sparkles size={11} className="text-emerald-500" />
+                  IA ASRAR
+                </button>
+              </div>
+
+            {/* Tab content space */}
+            <div className="flex-1 overflow-y-auto p-4 no-scrollbar">
+              
+              {/* Tab 1: Group Info Overview */}
+              {activeSidebarTab === "info" && (
+                <div className="space-y-5 text-left">
+                  <div>
+                    <h4 className="font-extrabold text-xs text-gray-400 uppercase tracking-widest mb-1">Description</h4>
+                    <p className="text-xs text-gray-500 dark:text-gray-300 leading-relaxed">
+                      {tLocal("tgSubtitle")}. Partagez des codes mystiques (Zikr, Abjad, calculs astronomiques) et des wirds authentiques en toute fraternité.
+                    </p>
+                  </div>
+
+                  {user?.role === "admin" && (
+                    <div className="bg-red-500/5 dark:bg-red-950/10 p-3.5 rounded-2xl border border-red-500/10 space-y-2.5">
+                      <span className="block text-[10px] font-extrabold text-red-600 dark:text-red-400 uppercase tracking-widest">
+                        🛡️ Contrôles d'Administration
+                      </span>
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <div>
+                          <span className="block font-bold text-gray-800 dark:text-gray-250">Partage de Code</span>
+                          <span className="block text-[9px] text-gray-400">Activer/désactiver l'écriture</span>
+                        </div>
+                        <button
+                          onClick={handleToggleCodeSharing}
+                          className={`px-3 py-1.5 text-[9px] font-black uppercase rounded-xl transition-all cursor-pointer ${
+                            codeSharingEnabled
+                              ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                              : "bg-red-600 hover:bg-red-700 text-white"
+                          }`}
+                        >
+                          {codeSharingEnabled ? "Activé" : "Désactivé"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <h4 className="font-extrabold text-xs text-gray-400 uppercase tracking-widest mb-2.5">{tLocal("rulesCharter")}</h4>
+                    <ul className="space-y-2 text-xs text-gray-600 dark:text-gray-300 font-semibold">
+                      <li className="flex items-center gap-2">
+                        <span className="text-emerald-500">🕌</span>
+                        <span>{tLocal("rule1")}</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <span className="text-emerald-500">📿</span>
+                        <span>{tLocal("rule2")}</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <span className="text-emerald-500">🛡️</span>
+                        <span>{tLocal("rule3")}</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <span className="text-emerald-500">🤝</span>
+                        <span>{tLocal("rule4")}</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div className="bg-emerald-500/5 dark:bg-emerald-500/10 p-3.5 rounded-2xl border border-emerald-500/20 text-center">
+                    <span className="block text-[10px] font-extrabold text-emerald-600 uppercase tracking-widest mb-1">Membres Actifs</span>
+                    <span className="block text-2xl font-black text-gray-900 dark:text-white">
+                      {membersList.length}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 2: Members List */}
+              {activeSidebarTab === "members" && (
+                <div className="space-y-3.5 text-left">
+                  {membersList.map((m, mIdx) => (
+                    <div
+                      key={`comm-member-${m.id}-${mIdx}`}
+                      onClick={() => setSelectedProfileMember(m)}
+                      className="flex items-center justify-between gap-3 p-2 rounded-2xl hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-xl bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-base shadow-inner border border-gray-150 dark:border-gray-700/80 relative">
+                          {m.avatar}
+                          {m.isOnline && (
+                            <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-green-500 border-2 border-white dark:border-gray-800 animate-pulse" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <span className="block text-xs font-bold text-gray-800 dark:text-gray-200 truncate">
+                            {m.name}
+                          </span>
+                          <span className="block text-[9.5px] text-gray-400">
+                            {m.country} • {m.points} pts
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Small role badge */}
+                      <span className="text-[9px] font-extrabold px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 rounded-md uppercase">
+                        {m.role}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Tab 3: Shared Media */}
+              {activeSidebarTab === "media" && (
+                <div className="space-y-4 text-left">
+                  <h4 className="font-extrabold text-xs text-gray-400 uppercase tracking-widest mb-2.5">Photos Partagées</h4>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {posts
+                      .filter((p) => p.attachments && p.attachments.some((a) => a.type === "image"))
+                      .flatMap((p) => p.attachments!)
+                      .slice(0, 12)
+                      .map((att, i) => (
+                        <div key={`shared-att-${att.url || i}-${i}`} className="relative group/side-img rounded-lg overflow-hidden h-16 bg-black/5 dark:bg-black/30">
+                          <img
+                            src={att.url}
+                            alt="Shared attachment"
+                            onClick={() => {
+                              setLightboxImages([att.url]);
+                              setLightboxIndex(0);
+                            }}
+                            className="w-full h-full object-cover cursor-pointer hover:opacity-95 transition-opacity"
+                          />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              downloadImageHighRes(att.url, att.fileName || `asrarhub-media-${i}.png`);
+                              setDeleteToast("Téléchargement HD lancé !");
+                              setTimeout(() => setDeleteToast(null), 2500);
+                            }}
+                            className="absolute bottom-1 right-1 p-1 bg-black/75 hover:bg-emerald-600 text-white rounded-md opacity-0 group-hover/side-img:opacity-100 transition-all cursor-pointer shadow-md"
+                            title="Télécharger en HD"
+                          >
+                            <Download size={11} />
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+
+                  <h4 className="font-extrabold text-xs text-gray-400 uppercase tracking-widest mt-4 mb-2.5">Codes Source</h4>
+                  <div className="space-y-2">
+                    {posts
+                      .filter((p) => p.codeSnippet)
+                      .slice(0, 5)
+                      .map((p, pIdx) => (
+                        <div
+                          key={`comm-code-post-${p.id}-${pIdx}`}
+                          onClick={() => {
+                            document.getElementById(`msg-${p.id}`)?.scrollIntoView({ behavior: "smooth" });
+                          }}
+                          className="bg-gray-50 dark:bg-gray-800/40 p-2 rounded-xl border border-gray-150 dark:border-gray-800/50 cursor-pointer hover:bg-gray-100 text-left"
+                        >
+                          <span className="block text-[9.5px] font-bold uppercase text-emerald-600 dark:text-teal-400">
+                            {p.codeSnippet!.language}
+                          </span>
+                          <span className="block text-[11px] text-gray-500 dark:text-gray-300 truncate">
+                            {p.content}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 4: IA Asrar Spiritual Assistant (Full Screen Trigger) */}
+              {activeSidebarTab === "ai" && (
+                <div className="flex flex-col h-full text-center py-6 px-3 space-y-4">
+                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-600 via-teal-600 to-cyan-500 flex items-center justify-center text-white text-2xl mx-auto shadow-lg shadow-emerald-500/20">
+                    🕌
+                  </div>
+                  <div className="space-y-1.5">
+                    <h4 className="font-extrabold text-sm text-gray-900 dark:text-white uppercase tracking-wider">
+                      Guide Spirituel IA Asrar
+                    </h4>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
+                      L'assistant IA est optimisé pour un affichage plein écran avec mise en page érudite, hiérarchie de titres de H1 à H6, couleurs et emojis.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsAiModalOpen(true)}
+                    className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black uppercase tracking-wider rounded-2xl shadow-lg shadow-emerald-600/20 hover:scale-102 active:scale-98 transition-all cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <Maximize2 size={16} />
+                    <span>Ouvrir en Plein Écran</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+
+      {/* Floating Context/Reactions Menu Popup */}
+      <AnimatePresence>
+        {activeContextMenuPostId && contextMenuCoords && (
+          <>
+            {/* Backdrop cover overlay */}
+            <div onClick={() => setActiveContextMenuPostId(null)} className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[2px]" />
+
+            {(() => {
+              const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
+              const menuHeight = 390;
+              const menuWidth = 240;
+
+              let top = contextMenuCoords.y;
+              let left = contextMenuCoords.x;
+
+              if (typeof window !== "undefined") {
+                if (top + menuHeight > window.innerHeight - 16) {
+                  top = Math.max(16, window.innerHeight - menuHeight - 16);
+                }
+                left = Math.max(12, Math.min(left, window.innerWidth - menuWidth - 16));
+              }
+
+              return (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: isMobile ? 25 : -10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: isMobile ? 25 : -10 }}
+                  transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                  className={`fixed bg-white dark:bg-[#182533] border border-gray-200/90 dark:border-gray-700/90 rounded-3xl shadow-2xl p-3 z-50 text-left max-h-[calc(100dvh-2.5rem)] overflow-y-auto no-scrollbar ${
+                    isMobile
+                      ? "inset-x-3 bottom-3 w-auto max-w-sm mx-auto"
+                      : "w-60"
+                  }`}
+                  style={isMobile ? undefined : { top: `${top}px`, left: `${left}px` }}
+                >
+                  {/* Drag indicator bar for mobile bottom sheet */}
+                  {isMobile && (
+                    <div className="w-10 h-1 bg-gray-300 dark:bg-gray-600 rounded-full mx-auto mb-2.5 shrink-0" />
+                  )}
+
+                  {/* Emojis list reaction bar */}
+                  <div className="flex items-center gap-1 pb-2 border-b border-gray-100 dark:border-gray-700/50 mb-2 justify-around">
+                    {[
+                      { icon: "👍", type: "like" },
+                      { icon: "❤️", type: "love" },
+                      { icon: "😂", type: "haha" },
+                      { icon: "😮", type: "wow" },
+                      { icon: "😢", type: "sad" },
+                      { icon: "😡", type: "angry" }
+                    ].map((item, itIdx) => (
+                      <button
+                        key={`ctx-reaction-${item.type}-${itIdx}`}
+                        onClick={() => handleAddReaction(activeContextMenuPostId, item.type as any)}
+                        className="hover:scale-125 text-base cursor-pointer active:scale-95 transition-transform"
+                      >
+                        {item.icon}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Action operations lists */}
+                  <div className="space-y-1">
+                    <button
+                      onClick={() => {
+                        if (activeContextMenuPostId) {
+                          setActiveCommentPostId((prev) => (prev === activeContextMenuPostId ? null : activeContextMenuPostId));
+                        }
+                        setActiveContextMenuPostId(null);
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 rounded-lg text-[11px] sm:text-xs font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-2 cursor-pointer"
+                    >
+                      <MessageSquare size={13} /> {tLocal("commentsAndReplies")}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const post = posts.find((p) => p.id === activeContextMenuPostId);
+                        if (post && post.authorId !== user?.uid) {
+                          setDmRecipient({ id: post.authorId, name: post.authorName });
+                          setIsDMOpen(true);
+                        }
+                        setActiveContextMenuPostId(null);
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg text-[11px] sm:text-xs font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2 cursor-pointer"
+                    >
+                      <MessageCircle size={13} /> {tLocal("privateMessageDirect")} (DM)
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const post = posts.find((p) => p.id === activeContextMenuPostId);
+                        if (post) setReplyToPost(post);
+                        setActiveContextMenuPostId(null);
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg text-[11px] sm:text-xs font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2 cursor-pointer"
+                    >
+                      <CornerUpLeft size={13} /> {tLocal("replyingTo")}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const post = posts.find((p) => p.id === activeContextMenuPostId);
+                        if (post) handlePinPost(post.id, !!post.isPinned);
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 hover:bg-amber-50 dark:hover:bg-amber-950/30 rounded-lg text-[11px] sm:text-xs font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2 cursor-pointer"
+                    >
+                      <Pin size={13} /> {posts.find((p) => p.id === activeContextMenuPostId)?.isPinned ? "Désépingler" : "Épingler le message"}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const post = posts.find((p) => p.id === activeContextMenuPostId);
+                        setIsSelectionMode(true);
+                        if (post && canUserDeletePost(post, user)) {
+                          setSelectedPostIds([post.id]);
+                        }
+                        setActiveContextMenuPostId(null);
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg text-[11px] sm:text-xs font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2 cursor-pointer"
+                    >
+                      <CheckSquare size={13} /> Sélectionner
+                    </button>
+
+                    {(() => {
+                      const currentPost = posts.find((p) => p.id === activeContextMenuPostId);
+                      if (!currentPost) return null;
+                      const canModify = canUserModifyPost(currentPost, user, messageEditDeleteLimitMinutes);
+                      const canDelete = canUserDeletePost(currentPost, user);
+                      const isAuthor = currentPost.authorId === user?.uid;
+                      const isAdmin = checkIsAdmin(user);
+
+                      return (
+                        <>
+                          {canModify && (
+                            <button
+                              onClick={() => {
+                                setEditingPostId(currentPost.id);
+                                setEditPostContent(currentPost.content || "");
+                                setActiveContextMenuPostId(null);
+                              }}
+                              className="w-full text-left px-2.5 py-1.5 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 rounded-lg text-[11px] sm:text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-2 cursor-pointer"
+                            >
+                              <Edit3 size={13} /> {tLocal("editPostBtn") || "Modifier"}
+                            </button>
+                          )}
+
+                          {canDelete && (
+                            <button
+                              onClick={() => {
+                                handleDeletePost(currentPost.id);
+                                setActiveContextMenuPostId(null);
+                              }}
+                              className="w-full text-left px-2.5 py-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-[11px] sm:text-xs font-bold text-red-600 dark:text-red-400 flex items-center gap-2 cursor-pointer"
+                            >
+                              <Trash2 size={13} /> {tLocal("deletePostBtn") || "Supprimer"}
+                            </button>
+                          )}
+
+                          {isAuthor && !canModify && !isAdmin && (
+                            <div className="px-2.5 py-1.5 text-[10px] italic text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 rounded-lg font-medium">
+                              ⏱️ Modification expirée (&gt; {formatLimitText(messageEditDeleteLimitMinutes)})
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </motion.div>
+              );
+            })()}
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: Edit Post Modal */}
+      <AnimatePresence>
+        {editingPostId && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white dark:bg-[#182533] rounded-3xl p-5 max-w-lg w-full border border-gray-100 dark:border-gray-700 shadow-2xl space-y-4"
+            >
+              <div className="flex justify-between items-center border-b border-gray-100 dark:border-gray-800 pb-3">
+                <h3 className="font-bold text-sm sm:text-base text-gray-900 dark:text-white flex items-center gap-2">
+                  <Edit3 size={18} className="text-emerald-500" /> Modifier le message
+                </h3>
+                <button
+                  onClick={() => {
+                    setEditingPostId(null);
+                    setEditPostContent("");
+                  }}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 block">
+                  Contenu du message :
+                </label>
+                <textarea
+                  value={editPostContent}
+                  onChange={(e) => setEditPostContent(e.target.value)}
+                  rows={5}
+                  className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-3 text-xs sm:text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+                  placeholder="Modifiez le texte de votre message..."
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-[10px] text-gray-400 dark:text-gray-500 font-medium flex items-center gap-1">
+                  <Clock size={11} /> Délai max d'édition : {formatLimitText(messageEditDeleteLimitMinutes)}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setEditingPostId(null);
+                      setEditPostContent("");
+                    }}
+                    className="px-4 py-2 text-xs font-bold text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    onClick={handleSaveEditPost}
+                    disabled={!editPostContent.trim() || isSubmittingEdit}
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-colors shadow-md flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {isSubmittingEdit ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                    <span>Enregistrer</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL 1: Create Poll Builder */}
+      <AnimatePresence>
+        {isPollModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="bg-white dark:bg-gray-800 rounded-3xl p-5 sm:p-6 w-full max-w-md shadow-2xl border border-gray-100 dark:border-gray-700 text-left"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-gray-700/50 mb-4">
+                <h3 className="font-extrabold text-sm sm:text-base text-gray-900 dark:text-white uppercase tracking-wider">
+                  🗳️ {tLocal("createPollTitle")}
+                </h3>
+                <button onClick={() => setIsPollModalOpen(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <form onSubmit={handlePublishPoll} className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Question</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Quelle heure préférez-vous pour le wird collectif ?"
+                    value={pollQuestion}
+                    onChange={(e) => setPollQuestion(e.target.value)}
+                    className="w-full p-3 bg-gray-50 dark:bg-gray-900 text-xs sm:text-sm text-gray-800 dark:text-white border border-gray-100 dark:border-gray-750 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Choix de réponses</label>
+                  {pollOptions.map((opt, i) => (
+                    <div key={`poll-opt-${i}`} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        required={i < 2}
+                        placeholder={`Choix ${i + 1}`}
+                        value={opt}
+                        onChange={(e) => {
+                          const updated = [...pollOptions];
+                          updated[i] = e.target.value;
+                          setPollOptions(updated);
+                        }}
+                        className="w-full p-3 bg-gray-50 dark:bg-gray-900 text-xs text-gray-800 dark:text-white border border-gray-100 dark:border-gray-750 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                      {pollOptions.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => setPollOptions(pollOptions.filter((_, idx) => idx !== i))}
+                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-between pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setPollOptions([...pollOptions, ""])}
+                    className="text-xs font-black text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 hover:underline cursor-pointer"
+                  >
+                    <Plus size={14} /> {tLocal("addOptionBtn")}
+                  </button>
+
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-2xl active:scale-95 transition-all cursor-pointer"
+                  >
+                    {tLocal("createPollBtn")}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL 2: Share Code/Wird Builder */}
+      <AnimatePresence>
+        {isCodeModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className={`bg-white dark:bg-gray-800 rounded-3xl p-5 sm:p-6 w-full ${codeLanguage === "html" ? "max-w-2xl" : "max-w-xl"} shadow-2xl border border-gray-100 dark:border-gray-700 transition-all duration-300 text-left`}
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-gray-700/50 mb-4">
+                <h3 className="font-extrabold text-sm sm:text-base text-gray-900 dark:text-white uppercase tracking-wider">
+                  💻 {tLocal("shareCodeTitle")}
+                </h3>
+                <button onClick={() => setIsCodeModalOpen(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <form onSubmit={handlePublishCode} className="space-y-4">
+                <div className="flex flex-col gap-3">
+                  <div className="flex-1">
+                    <label className="block text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Langage</label>
+                    <select
+                      value={codeLanguage}
+                      onChange={(e) => {
+                        setCodeLanguage(e.target.value);
+                        setCodeContent(CODE_TEMPLATES[e.target.value] || "");
+                      }}
+                      className="w-full p-3 bg-gray-50 dark:bg-gray-900 text-xs text-gray-800 dark:text-white border border-gray-100 dark:border-gray-750 rounded-xl focus:outline-none cursor-pointer"
+                    >
+                      <option value="javascript">JavaScript</option>
+                      <option value="typescript">TypeScript</option>
+                      <option value="python">Python</option>
+                      <option value="sql">SQL Database</option>
+                      <option value="html">HTML Render Preview</option>
+                    </select>
+                  </div>
+
+                  {codeLanguage === "html" && (
+                    <label className="flex items-center gap-2.5 p-3 bg-emerald-500/5 dark:bg-emerald-500/10 rounded-2xl border border-emerald-500/20 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={showPreviewDirectly}
+                        onChange={(e) => setShowPreviewDirectly(e.target.checked)}
+                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      />
+                      <span className="text-xs font-bold text-gray-750 dark:text-gray-300">
+                        Publier sous forme d'aperçu direct dans le groupe
+                      </span>
+                    </label>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Code Source</label>
+                  <textarea
+                    rows={6}
+                    required
+                    value={codeContent}
+                    onChange={(e) => setCodeContent(e.target.value)}
+                    className="w-full p-3.5 bg-gray-900 text-green-400 font-mono text-xs rounded-xl focus:outline-none"
+                  />
+                </div>
+
+                {codeLanguage === "html" && codeContent.trim() && (
+                  <div>
+                    <label className="block text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Aperçu en temps réel</label>
+                    <div className="border border-gray-100 dark:border-gray-700/50 rounded-2xl overflow-hidden bg-white shadow-inner">
+                      <div className="bg-gray-50 px-3.5 py-1.5 border-b border-gray-100 flex items-center justify-between select-none">
+                        <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping inline-block" />
+                          Rendu Live
+                        </span>
+                        <span className="text-[9px] font-bold text-gray-400 font-mono">iframe sandbox</span>
+                      </div>
+                      <iframe
+                        title="Live Creation Preview"
+                        srcDoc={codeContent}
+                        sandbox="allow-scripts"
+                        className="w-full h-[150px] border-0 bg-white block"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Explications / Secret</label>
+                  <input
+                    type="text"
+                    placeholder={tLocal("codeExpPlaceholder")}
+                    value={codeExplanation}
+                    onChange={(e) => setCodeExplanation(e.target.value)}
+                    className="w-full p-3 bg-gray-50 dark:bg-gray-900 text-xs sm:text-sm text-gray-800 dark:text-white border border-gray-100 dark:border-gray-750 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="submit"
+                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-2xl active:scale-95 transition-all cursor-pointer"
+                  >
+                    {tLocal("shareCodeBtn")}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL 3: Detailed Profile Popover Card */}
+      <AnimatePresence>
+        {selectedProfileMember && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="bg-white dark:bg-gray-800 rounded-3xl p-6 w-full max-w-sm shadow-2xl border border-gray-100 dark:border-gray-700 text-center relative overflow-hidden"
+            >
+              <button
+                onClick={() => setSelectedProfileMember(null)}
+                className="absolute top-4 right-4 p-1.5 text-gray-400 hover:text-gray-600 rounded-lg cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+
+              <div className="w-20 h-20 rounded-3xl bg-gray-50 dark:bg-gray-900 flex items-center justify-center text-4xl shadow-inner border border-gray-150 dark:border-gray-750 mx-auto mb-4 relative">
+                {selectedProfileMember.avatar}
+                {selectedProfileMember.isOnline && (
+                  <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-green-500 border-4 border-white dark:border-gray-800 animate-pulse" />
+                )}
+              </div>
+
+              <h3 className="font-extrabold text-base sm:text-lg text-gray-900 dark:text-white">
+                {selectedProfileMember.name}
+              </h3>
+              <p className="text-xs text-gray-400 flex items-center justify-center gap-1.5 mt-0.5">
+                <MapPin size={12} /> {selectedProfileMember.country} • {selectedProfileMember.isOnline ? "En Ligne" : "Hors Ligne"}
+              </p>
+
+              <div className="my-5 grid grid-cols-2 gap-3.5">
+                <div className="bg-gray-50/50 dark:bg-gray-900/30 p-2.5 rounded-2xl border border-gray-100 dark:border-gray-750/30 text-center">
+                  <span className="block text-[9px] font-extrabold text-gray-400 uppercase tracking-widest">Rang</span>
+                  <span className="block text-xs font-black text-emerald-600 dark:text-emerald-400 mt-1 uppercase">
+                    {selectedProfileMember.role}
+                  </span>
+                </div>
+                <div className="bg-gray-50/50 dark:bg-gray-900/30 p-2.5 rounded-2xl border border-gray-100 dark:border-gray-750/30 text-center">
+                  <span className="block text-[9px] font-extrabold text-gray-400 uppercase tracking-widest">Points</span>
+                  <span className="block text-xs font-black text-gray-900 dark:text-white mt-1">
+                    {selectedProfileMember.points} pts
+                  </span>
+                </div>
+              </div>
+
+              {/* Action buttons on Profile Card */}
+              <div className="space-y-2 pt-2">
+                {user?.uid !== selectedProfileMember.id && (
+                  <>
+                    <button
+                      onClick={() => {
+                        setDmRecipient({ id: selectedProfileMember.id, name: selectedProfileMember.name });
+                        setIsDMOpen(true);
+                        setSelectedProfileMember(null);
+                      }}
+                      className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold rounded-2xl active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <MessageSquare size={13} /> {tLocal("dmBtn")}
+                    </button>
+
+                    <button
+                      onClick={() => handleSendSpiritualGift(selectedProfileMember.id)}
+                      className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:opacity-90 text-white text-xs font-bold rounded-2xl active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <Gift size={13} /> {tLocal("sendGift")}
+                    </button>
+                  </>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* STUNNING LIGHTBOX MODAL WITH HIGH RESOLUTION DOWNLOAD */}
+      <AnimatePresence>
+        {lightboxImages.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/95 z-50 flex flex-col justify-between p-3 sm:p-6 select-none"
+          >
+            {/* TOP TOOLBAR */}
+            <div className="w-full flex items-center justify-between gap-2 z-10 bg-black/40 backdrop-blur-md px-3 sm:px-5 py-2.5 rounded-2xl border border-white/10 shrink-0">
+              {/* Left: Metadata & Counter */}
+              <div className="flex items-center gap-2 sm:gap-3">
+                <span className="text-white/90 text-xs sm:text-sm font-bold tracking-wider">
+                  {lightboxIndex + 1} / {lightboxImages.length}
+                </span>
+                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-white/10 backdrop-blur-md rounded-full text-[11px] font-semibold text-white/90 border border-white/10">
+                  <Sparkles size={12} className="text-amber-400" />
+                  <span>{lightboxMeta ? `${lightboxMeta.width} × ${lightboxMeta.height} px` : "HD"}</span>
+                  <span className="hidden sm:inline text-[9px] uppercase font-bold text-emerald-400 bg-emerald-950/70 px-1.5 py-0.5 rounded">Haute Résolution</span>
+                </div>
+              </div>
+
+              {/* Center: Interactive Zoom & Orientation Controls */}
+              <div className="hidden md:flex items-center gap-1 bg-white/10 px-2 py-1 rounded-xl border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setLightboxZoom(prev => Math.max(50, prev - 25))}
+                  className="p-1.5 hover:bg-white/20 text-white rounded-lg transition-colors cursor-pointer"
+                  title="Zoom arrière (-25%)"
+                >
+                  <ZoomOut size={16} />
+                </button>
+                <span className="text-xs font-mono font-bold text-white px-1.5 min-w-[45px] text-center">
+                  {lightboxZoom}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setLightboxZoom(prev => Math.min(300, prev + 25))}
+                  className="p-1.5 hover:bg-white/20 text-white rounded-lg transition-colors cursor-pointer"
+                  title="Zoom avant (+25%)"
+                >
+                  <ZoomIn size={16} />
+                </button>
+                <div className="h-4 w-px bg-white/20 mx-1" />
+                <button
+                  type="button"
+                  onClick={() => setLightboxRotation(prev => (prev + 90) % 360)}
+                  className="p-1.5 hover:bg-white/20 text-white rounded-lg transition-colors cursor-pointer"
+                  title="Pivoter de 90°"
+                >
+                  <RotateCw size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLightboxZoom(100);
+                    setLightboxRotation(0);
+                  }}
+                  className="p-1.5 hover:bg-white/20 text-white rounded-lg transition-colors cursor-pointer"
+                  title="Réinitialiser zoom et rotation"
+                >
+                  <Maximize2 size={16} />
+                </button>
+              </div>
+
+              {/* Right: Actions */}
+              <div className="flex items-center gap-2">
+                {/* Ultra HD 2X Button */}
+                <button
+                  type="button"
+                  disabled={isDownloadingHD}
+                  onClick={async () => {
+                    setIsDownloadingHD(true);
+                    const currentUrl = lightboxImages[lightboxIndex];
+                    await downloadImageHighRes(currentUrl, `asrarhub-ultra-hd-2x-${Date.now()}.png`, { upscaleFactor: 2 });
+                    setIsDownloadingHD(false);
+                    setDeleteToast("Image Ultra-HD (2X) téléchargée avec succès !");
+                    setTimeout(() => setDeleteToast(null), 3000);
+                  }}
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg active:scale-95 cursor-pointer border border-emerald-400/30 disabled:opacity-50"
+                  title="Améliorer la netteté et télécharger en résolution doublée Ultra-HD (2X)"
+                >
+                  <Sparkles size={13} className="text-amber-300" />
+                  <span>Ultra HD (2X)</span>
+                </button>
+
+                {/* Primary High-Res Download Button */}
+                <button
+                  type="button"
+                  disabled={isDownloadingHD}
+                  onClick={async () => {
+                    setIsDownloadingHD(true);
+                    const currentUrl = lightboxImages[lightboxIndex];
+                    await downloadImageHighRes(currentUrl, `asrarhub-image-hd-${Date.now()}.png`, { upscaleFactor: 1 });
+                    setIsDownloadingHD(false);
+                    setDeleteToast("Image Haute Résolution téléchargée avec succès !");
+                    setTimeout(() => setDeleteToast(null), 3000);
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg active:scale-95 cursor-pointer disabled:opacity-50"
+                  title="Télécharger l'image en pleine résolution"
+                >
+                  {isDownloadingHD ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                  <span>Télécharger HD</span>
+                </button>
+
+                {/* Close Button */}
+                <button
+                  type="button"
+                  onClick={() => setLightboxImages([])}
+                  className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors cursor-pointer ml-1"
+                  title="Fermer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* MAIN IMAGE STAGE */}
+            <div className="relative flex-1 w-full flex items-center justify-center overflow-hidden my-3">
+              {lightboxImages.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setLightboxIndex(prev => (prev - 1 + lightboxImages.length) % lightboxImages.length)}
+                  className="absolute left-2 sm:left-4 z-20 p-3 bg-black/60 hover:bg-black/90 text-white rounded-full transition-all cursor-pointer backdrop-blur-sm border border-white/10 active:scale-95 shadow-xl"
+                  title="Image précédente"
+                >
+                  <ChevronLeft size={24} />
+                </button>
+              )}
+
+              <div
+                className="w-full h-full flex items-center justify-center overflow-auto cursor-zoom-in"
+                onDoubleClick={() => setLightboxZoom(prev => prev === 100 ? 175 : 100)}
+                title="Double-cliquez pour zoomer/dézoomer"
+              >
+                <img
+                  key={`lightbox-img-${lightboxIndex}`}
+                  src={lightboxImages[lightboxIndex]}
+                  alt="Capture Haute Résolution"
+                  style={{
+                    transform: `scale(${lightboxZoom / 100}) rotate(${lightboxRotation}deg)`,
+                    transition: "transform 0.2s ease-out"
+                  }}
+                  className="max-w-full max-h-[70vh] sm:max-h-[76vh] object-contain rounded-xl shadow-2xl select-none"
+                />
+              </div>
+
+              {lightboxImages.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setLightboxIndex(prev => (prev + 1) % lightboxImages.length)}
+                  className="absolute right-2 sm:right-4 z-20 p-3 bg-black/60 hover:bg-black/90 text-white rounded-full transition-all cursor-pointer backdrop-blur-sm border border-white/10 active:scale-95 shadow-xl"
+                  title="Image suivante"
+                >
+                  <ChevronRight size={24} />
+                </button>
+              )}
+            </div>
+
+            {/* MOBILE FLOATING ACTIONS / STATUS FOOTER */}
+            <div className="w-full flex sm:hidden items-center justify-center gap-2 pt-1 pb-2">
+              <button
+                type="button"
+                disabled={isDownloadingHD}
+                onClick={async () => {
+                  setIsDownloadingHD(true);
+                  const currentUrl = lightboxImages[lightboxIndex];
+                  await downloadImageHighRes(currentUrl, `asrarhub-image-hd-${Date.now()}.png`, { upscaleFactor: 1 });
+                  setIsDownloadingHD(false);
+                  setDeleteToast("Image HD téléchargée avec succès !");
+                  setTimeout(() => setDeleteToast(null), 3000);
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 active:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg"
+              >
+                {isDownloadingHD ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                <span>Télécharger HD</span>
+              </button>
+              <button
+                type="button"
+                disabled={isDownloadingHD}
+                onClick={async () => {
+                  setIsDownloadingHD(true);
+                  const currentUrl = lightboxImages[lightboxIndex];
+                  await downloadImageHighRes(currentUrl, `asrarhub-ultra-hd-2x-${Date.now()}.png`, { upscaleFactor: 2 });
+                  setIsDownloadingHD(false);
+                  setDeleteToast("Image Ultra-HD (2X) téléchargée avec succès !");
+                  setTimeout(() => setDeleteToast(null), 3000);
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-purple-600 active:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-lg"
+              >
+                <Sparkles size={14} className="text-amber-300" />
+                <span>Ultra-HD (2X)</span>
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* FULL-SCREEN IA ASRAR SPIRITUAL ASSISTANT MODAL */}
+      <CommunityAiAssistantModal
+        isOpen={isAiModalOpen}
+        onClose={() => setIsAiModalOpen(false)}
+        user={user}
+        navigate={navigate}
+        messages={aiChatMessages}
+        onSendMessage={(text) => handleSendAiMessage(text)}
+        isLoading={isAiLoading}
+        onResetChat={handleResetAiChat}
+      />
+
+      {/* PROFESSIONAL DOCUMENT & FILE VIEWER MODAL */}
+      <AnimatePresence>
+        {docViewerFile && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className={`fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center overflow-hidden transition-all duration-200 ${
+              isDocViewerFullscreen ? "p-0" : "p-2 sm:p-5"
+            }`}
+          >
+            <motion.div
+              initial={{ scale: 0.94, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.94, y: 15 }}
+              transition={{ type: "spring", stiffness: 400, damping: 28 }}
+              className={`relative bg-white dark:bg-[#15202b] shadow-2xl flex flex-col overflow-hidden text-left transition-all duration-200 ${
+                isDocViewerFullscreen
+                  ? "w-full h-full max-w-none rounded-none border-0"
+                  : "w-full max-w-5xl h-[92vh] rounded-3xl border border-gray-200 dark:border-gray-800"
+              }`}
+            >
+              {/* TOP HEADER */}
+              <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 bg-gray-50 dark:bg-[#1c2a38] border-b border-gray-200 dark:border-gray-800 shrink-0">
+                <div className="flex items-center gap-3 min-w-0 flex-1 pr-2">
+                  {/* Dynamic File Extension Badge */}
+                  {(() => {
+                    const nameLower = (docViewerFile.fileName || "").toLowerCase();
+                    let icon = <FileText size={20} className="text-amber-500" />;
+                    let badgeColor = "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20";
+                    let label = "Document";
+
+                    if (docViewerFile.type === "video" || nameLower.endsWith(".mp4") || nameLower.endsWith(".webm")) {
+                      icon = <VideoIcon size={20} className="text-rose-500" />;
+                      badgeColor = "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20";
+                      label = "Vidéo HD";
+                    } else if (docViewerFile.type === "audio" || nameLower.endsWith(".mp3") || nameLower.endsWith(".wav")) {
+                      icon = <Music size={20} className="text-purple-500" />;
+                      badgeColor = "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20";
+                      label = "Audio";
+                    } else if (docViewerFile.type === "image" || nameLower.endsWith(".png") || nameLower.endsWith(".jpg") || nameLower.endsWith(".jpeg") || nameLower.endsWith(".webp")) {
+                      icon = <ImageIcon size={20} className="text-emerald-500" />;
+                      badgeColor = "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20";
+                      label = "Image";
+                    } else if (nameLower.endsWith(".pdf") || docViewerFile.url?.startsWith("data:application/pdf")) {
+                      icon = <FileText size={20} className="text-red-500" />;
+                      badgeColor = "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20";
+                      label = "PDF Studio";
+                    } else if (nameLower.endsWith(".doc") || nameLower.endsWith(".docx")) {
+                      icon = <FileText size={20} className="text-blue-500" />;
+                      badgeColor = "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20";
+                      label = "Word";
+                    } else if (nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx") || nameLower.endsWith(".csv")) {
+                      icon = <FileText size={20} className="text-emerald-500" />;
+                      badgeColor = "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20";
+                      label = "Excel / CSV";
+                    } else if (nameLower.endsWith(".txt") || nameLower.endsWith(".json") || nameLower.endsWith(".js") || nameLower.endsWith(".py")) {
+                      icon = <FileCode size={20} className="text-teal-500" />;
+                      badgeColor = "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20";
+                      label = "Code / Texte";
+                    }
+
+                    return (
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="p-2 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 shrink-0">
+                          {icon}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-xs sm:text-sm font-extrabold text-gray-900 dark:text-white truncate max-w-[200px] sm:max-w-[320px]">
+                              {docViewerFile.fileName || "Document"}
+                            </h3>
+                            <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${badgeColor}`}>
+                              {label}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-gray-400 flex items-center gap-2 mt-0.5">
+                            <span>{docViewerFile.fileSize || "Taille inconnue"}</span>
+                            <span>•</span>
+                            <span className="text-emerald-500 font-semibold">Lecteur Professionnel HD</span>
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* HEADER TAB NAVIGATION */}
+                <div className="hidden sm:flex items-center bg-gray-200/60 dark:bg-gray-800/80 p-1 rounded-2xl border border-gray-300/40 dark:border-gray-700/50">
+                  <button
+                    onClick={() => setDocViewerTab("viewer")}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      docViewerTab === "viewer"
+                        ? "bg-white dark:bg-[#15202b] text-emerald-600 dark:text-emerald-400 shadow-sm"
+                        : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                    }`}
+                  >
+                    <Eye size={14} />
+                    <span>Aperçu</span>
+                  </button>
+                  <button
+                    onClick={() => setDocViewerTab("text")}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      docViewerTab === "text"
+                        ? "bg-white dark:bg-[#15202b] text-emerald-600 dark:text-emerald-400 shadow-sm"
+                        : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                    }`}
+                  >
+                    <FileCode size={14} />
+                    <span>Texte & Code</span>
+                    {docViewerTextContent && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setDocViewerTab("details")}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      docViewerTab === "details"
+                        ? "bg-white dark:bg-[#15202b] text-emerald-600 dark:text-emerald-400 shadow-sm"
+                        : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                    }`}
+                  >
+                    <Info size={14} />
+                    <span>Détails</span>
+                  </button>
+                </div>
+
+                {/* RIGHT ACTIONS */}
+                <div className="flex items-center gap-1.5 ml-2">
+                  {docViewerFile.type === "image" || (docViewerFile.fileName || "").match(/\.(jpg|jpeg|png|webp|gif|svg)$/i) ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await downloadImageHighRes(docViewerFile.url, docViewerFile.fileName || `asrarhub-doc-img-hd-${Date.now()}.png`);
+                        setDeleteToast("Image Haute Résolution téléchargée !");
+                        setTimeout(() => setDeleteToast(null), 3000);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-md shadow-emerald-500/20 cursor-pointer"
+                      title="Télécharger l'image en Haute Résolution"
+                    >
+                      <Download size={14} />
+                      <span className="hidden sm:inline">Télécharger HD</span>
+                    </button>
+                  ) : (
+                    <a
+                      href={docViewerFile.url}
+                      download={docViewerFile.fileName || "document"}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-md shadow-emerald-500/20 cursor-pointer"
+                      title="Télécharger le fichier"
+                    >
+                      <Download size={14} />
+                      <span className="hidden sm:inline">Télécharger</span>
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={toggleDocViewerFullscreen}
+                    className="p-2 rounded-xl text-gray-500 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                    title={isDocViewerFullscreen ? "Quitter le plein écran" : "Afficher en Plein Écran"}
+                  >
+                    {isDocViewerFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (document.fullscreenElement && document.exitFullscreen) {
+                        document.exitFullscreen().catch(() => {});
+                      }
+                      setIsDocViewerFullscreen(false);
+                      setDocViewerFile(null);
+                    }}
+                    className="p-2 rounded-xl text-gray-400 hover:text-gray-600 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                    title="Fermer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {/* MOBILE TAB BAR */}
+              <div className="flex sm:hidden items-center justify-around px-2 py-2 bg-gray-100 dark:bg-[#1c2a38] border-b border-gray-200 dark:border-gray-800 shrink-0">
+                <button
+                  onClick={() => setDocViewerTab("viewer")}
+                  className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold ${
+                    docViewerTab === "viewer" ? "bg-emerald-500 text-white" : "text-gray-500 dark:text-gray-400"
+                  }`}
+                >
+                  <Eye size={13} /> Aperçu
+                </button>
+                <button
+                  onClick={() => setDocViewerTab("text")}
+                  className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold ${
+                    docViewerTab === "text" ? "bg-emerald-500 text-white" : "text-gray-500 dark:text-gray-400"
+                  }`}
+                >
+                  <FileCode size={13} /> Texte
+                </button>
+                <button
+                  onClick={() => setDocViewerTab("details")}
+                  className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold ${
+                    docViewerTab === "details" ? "bg-emerald-500 text-white" : "text-gray-500 dark:text-gray-400"
+                  }`}
+                >
+                  <Info size={13} /> Infos
+                </button>
+              </div>
+
+              {/* INTERACTIVE TOOLBAR FOR ZOOM / ROTATION / SEARCH */}
+              {docViewerTab === "viewer" && (
+                <div className="flex items-center justify-between px-4 py-2 bg-gray-100/80 dark:bg-[#192734] border-b border-gray-200 dark:border-gray-800 text-xs shrink-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-500 dark:text-gray-400 font-bold text-[11px] hidden sm:inline">Zoom:</span>
+                    <button
+                      onClick={() => setDocViewerZoom((prev) => Math.max(50, prev - 25))}
+                      className="p-1.5 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 shadow-sm border border-gray-200 dark:border-gray-700 cursor-pointer"
+                      title="Dézoomer"
+                    >
+                      <ZoomOut size={14} />
+                    </button>
+                    <span className="font-extrabold text-[11px] min-w-[40px] text-center text-gray-800 dark:text-white">
+                      {docViewerZoom}%
+                    </span>
+                    <button
+                      onClick={() => setDocViewerZoom((prev) => Math.min(250, prev + 25))}
+                      className="p-1.5 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 shadow-sm border border-gray-200 dark:border-gray-700 cursor-pointer"
+                      title="Zoomer"
+                    >
+                      <ZoomIn size={14} />
+                    </button>
+                    {docViewerZoom !== 100 && (
+                      <button
+                        onClick={() => setDocViewerZoom(100)}
+                        className="px-2 py-1 text-[10px] font-bold rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 cursor-pointer"
+                      >
+                        Reset
+                      </button>
+                    )}
+
+                    {/* Rotation button for images */}
+                    {(docViewerFile.type === "image" || (docViewerFile.fileName || "").match(/\.(jpg|jpeg|png|webp|gif)$/i)) && (
+                      <button
+                        onClick={() => setDocViewerRotation((prev) => (prev + 90) % 360)}
+                        className="p-1.5 ml-2 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 shadow-sm border border-gray-200 dark:border-gray-700 cursor-pointer flex items-center gap-1 text-[11px]"
+                        title="Pivoter"
+                      >
+                        <RotateCw size={14} />
+                        <span className="hidden sm:inline">{docViewerRotation}°</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {/* View mode toggle (Page par page vs Défilement vertical) for PDF */}
+                    {(docViewerFile.url.startsWith("data:application/pdf") || (docViewerFile.fileName || "").toLowerCase().endsWith(".pdf")) && (
+                      <div className="flex items-center bg-white dark:bg-gray-800 p-0.5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDocViewerPdfMode("continuous");
+                            try { localStorage.setItem("asrarhub_pdf_view_mode", "continuous"); } catch (_) {}
+                          }}
+                          className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                            docViewerPdfMode === "continuous"
+                              ? "bg-emerald-500 text-white shadow-xs"
+                              : "text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+                          }`}
+                          title="Défilement vertical continu (scroller toutes les pages)"
+                        >
+                          <ScrollText size={13} />
+                          <span className="hidden sm:inline">Défilement continu</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDocViewerPdfMode("single");
+                            try { localStorage.setItem("asrarhub_pdf_view_mode", "single"); } catch (_) {}
+                          }}
+                          className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                            docViewerPdfMode === "single"
+                              ? "bg-emerald-500 text-white shadow-xs"
+                              : "text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+                          }`}
+                          title="Affichage page par page"
+                        >
+                          <BookOpen size={13} />
+                          <span className="hidden sm:inline">Page par page</span>
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={toggleDocViewerFullscreen}
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg shadow-sm border transition-all cursor-pointer text-[11px] font-bold ${
+                        isDocViewerFullscreen
+                          ? "bg-emerald-500 text-white border-emerald-600 shadow-emerald-500/20"
+                          : "bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 border-gray-200 dark:border-gray-700"
+                      }`}
+                      title={isDocViewerFullscreen ? "Quitter le mode plein écran" : "Afficher en Plein Écran"}
+                    >
+                      {isDocViewerFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                      <span className="hidden sm:inline">{isDocViewerFullscreen ? "Fenêtre" : "Plein Écran"}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* MAIN VIEWER DISPLAY BODY */}
+              <div className={`flex-1 min-h-0 w-full bg-gray-100 dark:bg-[#111923] flex flex-col items-center justify-start relative overflow-hidden ${
+                (docViewerFile.url.startsWith("data:application/pdf") || (docViewerFile.fileName || "").toLowerCase().endsWith(".pdf"))
+                  ? "p-0"
+                  : "p-3 sm:p-6 overflow-auto"
+              }`}>
+                {/* TAB 1: INTERACTIVE VIEWER */}
+                {docViewerTab === "viewer" && (
+                  <div className="w-full h-full min-h-0 flex flex-col items-center justify-start overflow-hidden">
+                    {/* 1. PDF FILE */}
+                    {(docViewerFile.url.startsWith("data:application/pdf") || (docViewerFile.fileName || "").toLowerCase().endsWith(".pdf")) ? (
+                      <PdfCanvasViewer
+                        url={docViewerFile.url}
+                        zoom={docViewerZoom}
+                        viewMode={docViewerPdfMode}
+                        onViewModeChange={(mode) => {
+                          setDocViewerPdfMode(mode);
+                          try { localStorage.setItem("asrarhub_pdf_view_mode", mode); } catch (_) {}
+                        }}
+                        onExtractText={(txt) => setDocViewerTextContent(txt)}
+                      />
+                    ) : docViewerFile.type === "image" || (docViewerFile.fileName || "").match(/\.(jpg|jpeg|png|webp|gif|svg)$/i) ? (
+                      /* 2. IMAGE FILE */
+                      <div className="w-full h-full flex items-center justify-center overflow-auto p-4">
+                        <img
+                          src={docViewerFile.url}
+                          alt={docViewerFile.fileName || "Preview"}
+                          style={{
+                            transform: `scale(${docViewerZoom / 100}) rotate(${docViewerRotation}deg)`,
+                            transition: "transform 0.2s ease"
+                          }}
+                          className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl border border-gray-200/50 dark:border-gray-800/50"
+                        />
+                      </div>
+                    ) : docViewerFile.type === "video" || (docViewerFile.fileName || "").match(/\.(mp4|webm|mov)$/i) ? (
+                      /* 3. VIDEO FILE */
+                      <div className="w-full max-w-4xl max-h-full flex items-center justify-center p-2">
+                        <video
+                          src={docViewerFile.url}
+                          controls
+                          autoPlay
+                          className="w-full max-h-[70vh] rounded-2xl shadow-2xl border border-gray-300 dark:border-gray-800 bg-black"
+                        />
+                      </div>
+                    ) : docViewerFile.type === "audio" || (docViewerFile.fileName || "").match(/\.(mp3|wav|ogg|m4a)$/i) ? (
+                      /* 4. AUDIO FILE */
+                      <div className="w-full max-w-md bg-white dark:bg-[#1c2a38] p-6 rounded-3xl shadow-2xl border border-gray-200 dark:border-gray-800 text-center space-y-4">
+                        <div className="w-20 h-20 mx-auto rounded-full bg-gradient-to-tr from-purple-500 to-indigo-600 text-white flex items-center justify-center shadow-lg animate-pulse">
+                          <Music size={36} />
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-base text-gray-900 dark:text-white truncate">
+                            {docViewerFile.fileName || "Fichier Audio"}
+                          </h4>
+                          <p className="text-xs text-gray-400 mt-1">{docViewerFile.fileSize || "Audio HD"}</p>
+                        </div>
+                        <audio src={docViewerFile.url} controls className="w-full" />
+                      </div>
+                    ) : (docViewerFile.fileName || "").match(/\.(doc|docx|odt|rtf|xls|xlsx|csv|ppt|pptx)$/i) ? (
+                      /* 4.5. OFFICE / WORD / EXCEL INTERACTIVE DOCUMENT VIEWER */
+                      <div className="w-full h-full flex flex-col items-center justify-start p-2 sm:p-4 overflow-hidden">
+                        {(() => {
+                          const directFileUrl = docViewerFile.url.startsWith("http")
+                            ? docViewerFile.url
+                            : typeof window !== "undefined"
+                            ? `${window.location.origin}${docViewerFile.url.startsWith("/") ? "" : "/"}${docViewerFile.url}`
+                            : getApiUrl(docViewerFile.url);
+                          const isLocalUrl = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || directFileUrl.includes("localhost") || directFileUrl.includes("127.0.0.1") || docViewerFile.url.startsWith("data:"));
+                          const googleDocsUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(directFileUrl)}&embedded=true`;
+                          const isWord = (docViewerFile.fileName || "").match(/\.(doc|docx|odt|rtf)$/i);
+                          const isExcel = (docViewerFile.fileName || "").match(/\.(xls|xlsx|csv)$/i);
+                          const isPpt = (docViewerFile.fileName || "").match(/\.(ppt|pptx)$/i);
+                          const badgeColor = isWord ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20" : isExcel ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20";
+                          const label = isWord ? "Document Word" : isExcel ? "Tableur Excel" : isPpt ? "Présentation PowerPoint" : "Document Office";
+                          const downloadHref = docViewerFile.url.includes("/api/community/file/") ? `${docViewerFile.url}/download` : docViewerFile.url;
+
+                          return (
+                            <div className="w-full h-full flex flex-col items-center justify-between gap-3">
+                              {/* Quick Actions Top Bar */}
+                              <div className="w-full flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-white dark:bg-[#1c2a38] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm shrink-0">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className={`p-1.5 rounded-lg ${isWord ? "bg-blue-500/10 text-blue-500" : "bg-emerald-500/10 text-emerald-500"}`}>
+                                    <FileText size={16} />
+                                  </div>
+                                  <span className="text-xs font-bold text-gray-800 dark:text-gray-200 truncate max-w-[160px] sm:max-w-xs" title={docViewerFile.fileName}>
+                                    {docViewerFile.fileName || "Document"}
+                                  </span>
+                                  <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${badgeColor}`}>
+                                    {label}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <a
+                                    href={downloadHref}
+                                    download={docViewerFile.fileName || "document"}
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                                  >
+                                    <Download size={13} />
+                                    <span>Télécharger</span>
+                                  </a>
+                                  {!isLocalUrl ? (
+                                    <a
+                                      href={googleDocsUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                                    >
+                                      <ExternalLink size={13} />
+                                      <span>Google Docs</span>
+                                    </a>
+                                  ) : (
+                                    <a
+                                      href={docViewerFile.url.startsWith("http") ? docViewerFile.url : getApiUrl(docViewerFile.url)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                                    >
+                                      <ExternalLink size={13} />
+                                      <span>Ouvrir dans l'onglet</span>
+                                    </a>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Interactive Office Viewer Container */}
+                              <div className="w-full flex-1 min-h-0 bg-white dark:bg-[#15202b] rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden shadow-lg relative flex flex-col items-center justify-center p-4">
+                                {!isLocalUrl ? (
+                                  <iframe
+                                    src={googleDocsUrl}
+                                    className="w-full h-full border-0 rounded-2xl bg-white"
+                                    title={docViewerFile.fileName || "Aperçu Office"}
+                                  />
+                                ) : (
+                                  <div className="w-full max-w-md bg-gray-50 dark:bg-[#1c2a38] rounded-3xl p-6 text-center space-y-4 shadow-md border border-gray-200 dark:border-gray-700">
+                                    <div className="w-20 h-20 mx-auto rounded-3xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shadow-sm">
+                                      <FileText size={40} />
+                                    </div>
+                                    <div>
+                                      <h4 className="font-extrabold text-sm sm:text-base text-gray-900 dark:text-white truncate">
+                                        {docViewerFile.fileName || "Document Office"}
+                                      </h4>
+                                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                        {docViewerFile.fileSize || "Format bureautique"} • {label}
+                                      </p>
+                                    </div>
+                                    <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl text-xs text-blue-700 dark:text-blue-300 font-medium leading-relaxed">
+                                      Ce document est sécurisé et prêt. Cliquez ci-dessous pour le télécharger ou l'ouvrir directement avec votre application (Word, Excel ou LibreOffice).
+                                    </div>
+                                    <div className="flex flex-col sm:flex-row gap-2.5 justify-center">
+                                      <a
+                                        href={downloadHref}
+                                        download={docViewerFile.fileName || "document"}
+                                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                                      >
+                                        <Download size={14} />
+                                        <span>Télécharger le Fichier</span>
+                                      </a>
+                                      <a
+                                        href={docViewerFile.url.startsWith("http") ? docViewerFile.url : getApiUrl(docViewerFile.url)}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                                      >
+                                        <ExternalLink size={14} />
+                                        <span>Ouvrir Fichier</span>
+                                      </a>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    ) : docViewerTextContent ? (
+                      /* 5. TEXT / CODE FILE */
+                      <div className="w-full h-full max-w-4xl bg-[#1e1e1e] rounded-2xl p-4 shadow-2xl overflow-auto border border-gray-800 text-left font-mono text-xs sm:text-sm text-emerald-400 leading-relaxed">
+                        <pre className="whitespace-pre-wrap break-words">{docViewerTextContent}</pre>
+                      </div>
+                    ) : (
+                      /* 6. GENERIC / OFFICE / BINARY DOCUMENT CARD */
+                      <div className="w-full max-w-lg bg-white dark:bg-[#1c2a38] rounded-3xl p-6 sm:p-8 shadow-2xl border border-gray-200 dark:border-gray-800 text-center space-y-6">
+                        <div className="w-24 h-24 mx-auto rounded-3xl bg-gradient-to-tr from-amber-500 to-yellow-600 text-white flex items-center justify-center shadow-xl">
+                          <FileText size={48} />
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="text-base sm:text-lg font-black text-gray-900 dark:text-white truncate">
+                            {docViewerFile.fileName || "Document Asrar"}
+                          </h3>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            Taille: {docViewerFile.fileSize || "Non spécifiée"}
+                          </p>
+                        </div>
+                        <div className="p-4 bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/30 rounded-2xl text-xs text-amber-700 dark:text-amber-300 font-medium leading-relaxed">
+                          Ce fichier a été analysé et est prêt pour la consultation interactive ou le téléchargement sécurisé.
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                          <a
+                            href={docViewerFile.url.includes("/api/community/file/") ? `${docViewerFile.url}/download` : docViewerFile.url}
+                            download={docViewerFile.fileName || "document"}
+                            className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 text-xs uppercase tracking-wider"
+                          >
+                            <Download size={16} />
+                            Télécharger le Fichier
+                          </a>
+                          <a
+                            href={docViewerFile.url.startsWith("http") ? docViewerFile.url : getApiUrl(docViewerFile.url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 text-xs uppercase tracking-wider"
+                          >
+                            <ExternalLink size={16} />
+                            Ouvrir dans un Onglet
+                          </a>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 2: TEXT & CODE EXTRACTOR */}
+                {docViewerTab === "text" && (
+                  <div className="w-full h-full max-w-4xl flex flex-col bg-white dark:bg-[#1c2a38] rounded-2xl shadow-xl border border-gray-200 dark:border-gray-800 overflow-hidden text-left">
+                    <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-[#15202b] border-b border-gray-200 dark:border-gray-800">
+                      <div className="flex items-center gap-2 flex-1">
+                        <Search size={14} className="text-gray-400" />
+                        <input
+                          type="text"
+                          value={docSearchQuery}
+                          onChange={(e) => setDocSearchQuery(e.target.value)}
+                          placeholder="Filtrer ou rechercher dans le texte..."
+                          className="w-full bg-transparent border-none text-xs text-gray-900 dark:text-white focus:outline-none"
+                        />
+                      </div>
+                      {docViewerTextContent && (
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(docViewerTextContent);
+                            setDocViewerCopied(true);
+                            setTimeout(() => setDocViewerCopied(false), 2000);
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                        >
+                          {docViewerCopied ? <Check size={14} /> : <Copy size={14} />}
+                          <span>{docViewerCopied ? "Copié !" : "Copier Tout"}</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex-1 p-4 overflow-auto font-mono text-xs text-gray-800 dark:text-gray-200 leading-relaxed bg-gray-50/50 dark:bg-[#111923]">
+                      {docViewerTextContent ? (
+                        <pre className="whitespace-pre-wrap break-words">
+                          {docSearchQuery
+                            ? docViewerTextContent
+                                .split("\n")
+                                .filter((line) => line.toLowerCase().includes(docSearchQuery.toLowerCase()))
+                                .join("\n") || "Aucune ligne ne correspond à votre recherche."
+                            : docViewerTextContent}
+                        </pre>
+                      ) : (
+                        <div className="text-center py-16 text-gray-400 space-y-3">
+                          <FileText size={36} className="mx-auto text-gray-300 dark:text-gray-600" />
+                          <p className="text-xs max-w-md mx-auto">
+                            Ce document est un fichier binaire (image, vidéo, archive ou binaire compilé). Aucun texte brut directement lisible n'a été extrait.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 3: FILE DETAILS */}
+                {docViewerTab === "details" && (
+                  <div className="w-full max-w-2xl bg-white dark:bg-[#1c2a38] rounded-3xl p-6 sm:p-8 shadow-xl border border-gray-200 dark:border-gray-800 text-left space-y-6">
+                    <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+                      <Info size={16} className="text-emerald-500" />
+                      Spécifications du Fichier
+                    </h3>
+                    <div className="divide-y divide-gray-100 dark:divide-gray-800 text-xs text-gray-700 dark:text-gray-300">
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-bold text-gray-500">Nom du Fichier:</span>
+                        <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">{docViewerFile.fileName || "Non nommé"}</span>
+                      </div>
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-bold text-gray-500">Taille estimée:</span>
+                        <span>{docViewerFile.fileSize || "Standard"}</span>
+                      </div>
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-bold text-gray-500">Encodage / Protocole:</span>
+                        <span>{docViewerFile.url.startsWith("data:") ? "Base64 Data URI" : "HTTPS Secure Link"}</span>
+                      </div>
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-bold text-gray-500">Type de Fichier:</span>
+                        <span className="uppercase font-bold">{docViewerFile.type || "Document"}</span>
+                      </div>
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-bold text-gray-500">Statut de sécurité:</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                          <CheckCircle size={14} /> Vérifié & Réseau Sécurisé
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* PRIVATE MESSAGES DRAWER */}
+      {isDMOpen && (
+        <DirectMessages
+          onClose={() => {
+            setIsDMOpen(false);
+            setDmRecipient(null);
+          }}
+          initialRecipientId={dmRecipient?.id}
+          initialRecipientName={dmRecipient?.name}
+        />
+      )}
+
+      {/* Guest Authentication Modal for messaging & community participation */}
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+
+      {/* Delete Confirmation Modal (Single & Batch) */}
+      <AnimatePresence>
+        {postToDelete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 8 }}
+              className="bg-white dark:bg-[#182533] border border-gray-200 dark:border-gray-700/80 rounded-2xl shadow-2xl p-5 sm:p-6 max-w-md w-full text-center"
+            >
+              <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400 flex items-center justify-center mx-auto mb-3.5">
+                <Trash2 size={24} />
+              </div>
+              <h4 className="text-base sm:text-lg font-bold text-gray-900 dark:text-white mb-1.5">
+                {postToDelete.isBatch
+                  ? `Supprimer ${postToDelete.count} message${(postToDelete.count || 0) > 1 ? "s" : ""} ?`
+                  : "Supprimer ce message ?"}
+              </h4>
+              <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
+                {postToDelete.isBatch
+                  ? `Êtes-vous sûr de vouloir supprimer définitivement les ${postToDelete.count} messages sélectionnés ? Cette action est irréversible.`
+                  : "Êtes-vous sûr de vouloir supprimer définitivement ce message de la communauté ? Cette action est irréversible."}
+              </p>
+              {postToDelete.content && (
+                <div className="bg-gray-50 dark:bg-gray-800/60 rounded-xl p-2.5 mb-4 text-left text-xs text-gray-600 dark:text-gray-300 italic line-clamp-2 border border-gray-150 dark:border-gray-700/50">
+                  "{postToDelete.content}"
+                </div>
+              )}
+              <div className="flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setPostToDelete(null)}
+                  className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={handleConfirmDelete}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-red-600 hover:bg-red-700 text-white transition-all shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  {isDeleting ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>Suppression...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={16} />
+                      <span>Supprimer</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Action / Download / Delete Feedback Notification Card */}
+      <AnimatePresence mode="wait">
+        {deleteToast && (
+          <motion.div
+            key={`comm-toast-wrap-${deleteToast}`}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center p-4 pointer-events-none"
+          >
+            <div
+              onClick={() => setDeleteToast(null)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-[2px] pointer-events-auto"
+            />
+            <motion.div
+              key={`comm-toast-card-${deleteToast}`}
+              initial={{ opacity: 0, scale: 0.92, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 10 }}
+              transition={{ type: "spring", stiffness: 450, damping: 28 }}
+              className="relative z-10 bg-slate-900/98 dark:bg-slate-950/98 text-white px-6 py-4 rounded-2xl shadow-2xl border border-emerald-500/40 ring-1 ring-white/10 flex items-center gap-3.5 max-w-sm pointer-events-auto text-left"
+            >
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 shadow-sm">
+                <Check size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
+                  Notification
+                </p>
+                <p className="text-xs sm:text-sm font-semibold text-white mt-0.5 break-words">
+                  {deleteToast}
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+/* CLIENT-SIDE CANVAS PDF VIEWER COMPONENT (PDF.js) */
+interface PdfCanvasViewerProps {
+  url: string;
+  zoom: number;
+  viewMode?: "continuous" | "single";
+  onViewModeChange?: (mode: "continuous" | "single") => void;
+  onExtractText?: (text: string) => void;
+}
+
+// Single Page Item for Continuous Vertical Scrolling Mode
+const PdfSinglePageItem: React.FC<{
+  pdfDoc: any;
+  pageNum: number;
+  numPages: number;
+  zoom: number;
+  onIntersect: (pageNum: number) => void;
+}> = ({ pdfDoc, pageNum, numPages, zoom, onIntersect }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const renderTaskRef = useRef<any>(null);
+  const [rendered, setRendered] = useState(false);
+  const [isInViewport, setIsInViewport] = useState(pageNum <= 4);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setIsInViewport(true);
+            if (entry.intersectionRatio >= 0.2) {
+              onIntersect(pageNum);
+            }
+          }
+        });
+      },
+      {
+        rootMargin: "600px 0px",
+        threshold: [0, 0.2, 0.5]
+      }
+    );
+
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, [pageNum, onIntersect]);
+
+  useEffect(() => {
+    if (!pdfDoc || !canvasRef.current || !isInViewport) return;
+    let isCancelled = false;
+
+    const render = async () => {
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch (_) {}
+      }
+
+      try {
+        const page = await pdfDoc.getPage(pageNum);
+        if (isCancelled) return;
+
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const baseScale = 1.3;
+        const scale = baseScale * (zoom / 100);
+        const viewport = page.getViewport({ scale });
+        const dpr = window.devicePixelRatio || 1;
+
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+        const renderContext: any = {
+          canvasContext: ctx,
+          transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+          viewport: viewport
+        };
+
+        const task = page.render(renderContext);
+        renderTaskRef.current = task;
+        await task.promise;
+        if (!isCancelled) {
+          setRendered(true);
+        }
+      } catch (e: any) {
+        if (e?.name !== "RenderingCancelledException") {
+          console.error(`Page ${pageNum} render error:`, e);
+        }
+      }
+    };
+
+    render();
+
+    return () => {
+      isCancelled = true;
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch (_) {}
+      }
+    };
+  }, [pdfDoc, pageNum, zoom, isInViewport]);
+
+  return (
+    <div
+      id={`pdf-continuous-page-${pageNum}`}
+      ref={containerRef}
+      className="flex flex-col items-center mb-6 sm:mb-8 last:mb-4 w-full shrink-0 scroll-mt-16 select-none"
+      style={{ touchAction: "pan-x pan-y" }}
+    >
+      {/* Page indicator badge */}
+      <div className="flex items-center gap-2 mb-2 px-3 py-1 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md rounded-full text-[11px] font-bold text-gray-700 dark:text-gray-300 shadow-sm border border-gray-200/60 dark:border-gray-700/60 select-none">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+        <span>Page {pageNum} sur {numPages}</span>
+      </div>
+
+      <div
+        className="relative shadow-2xl rounded-2xl bg-white border border-gray-200 dark:border-gray-800 overflow-hidden max-w-full"
+        style={{ touchAction: "pan-x pan-y" }}
+      >
+        {!rendered && (
+          <div className="w-[300px] h-[420px] sm:w-[520px] sm:h-[700px] max-w-full flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-900 animate-pulse text-gray-400">
+            <Loader2 className="animate-spin mb-2 text-emerald-500" size={28} />
+            <span className="text-xs font-semibold">Chargement page {pageNum}...</span>
+          </div>
+        )}
+        <canvas
+          ref={canvasRef}
+          className={`block max-w-full h-auto transition-opacity duration-200 ${
+            !rendered ? "opacity-0 absolute top-0 left-0" : "opacity-100"
+          }`}
+          style={{ touchAction: "pan-x pan-y" }}
+        />
+      </div>
+    </div>
+  );
+};
+
+const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
+  url,
+  zoom,
+  viewMode = "continuous",
+  onViewModeChange,
+  onExtractText
+}) => {
+  const [numPages, setNumPages] = useState<number>(0);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [useFallbackIframe, setUseFallbackIframe] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pdfDoc, setPdfDoc] = useState<any>(null);
+  const [internalMode, setInternalMode] = useState<"continuous" | "single">(viewMode);
+
+  const activeMode = viewMode || internalMode;
+  const singleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const renderTaskRef = useRef<any>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const handleModeToggle = (mode: "continuous" | "single") => {
+    setInternalMode(mode);
+    onViewModeChange?.(mode);
+  };
+
+  const scrollToPage = (pageNum: number) => {
+    const target = Math.max(1, Math.min(numPages, pageNum));
+    setCurrentPage(target);
+    if (activeMode === "continuous") {
+      const el = document.getElementById(`pdf-continuous-page-${target}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
+  };
+
+  const touchStartXRef = useRef<number | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
+
+  const handleSingleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      touchStartXRef.current = e.touches[0].clientX;
+      touchStartYRef.current = e.touches[0].clientY;
+    }
+  };
+
+  const handleSingleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartXRef.current === null || touchStartYRef.current === null) return;
+    const touchEndX = e.changedTouches[0].clientX;
+    const touchEndY = e.changedTouches[0].clientY;
+    const diffX = touchStartXRef.current - touchEndX;
+    const diffY = touchStartYRef.current - touchEndY;
+
+    // If horizontal swipe is dominant and > 50px
+    if (Math.abs(diffX) > 50 && Math.abs(diffX) > Math.abs(diffY) * 1.3) {
+      if (diffX > 0 && currentPage < numPages) {
+        scrollToPage(currentPage + 1);
+      } else if (diffX < 0 && currentPage > 1) {
+        scrollToPage(currentPage - 1);
+      }
+    }
+    touchStartXRef.current = null;
+    touchStartYRef.current = null;
+  };
+
+  const loadPdf = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      setPdfDoc(null);
+
+      const pdfjsLib = await import("pdfjs-dist");
+      try {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+      } catch (_) {
+        try {
+          pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version || "6.3.289"}/build/pdf.worker.min.mjs`;
+        } catch (__) {}
+      }
+
+      let dataBytes: Uint8Array;
+      if (url.startsWith("data:")) {
+        const parts = url.split(";base64,");
+        const b64 = parts.length > 1 ? parts[1] : parts[0];
+        const binaryString = atob(b64);
+        const len = binaryString.length;
+        dataBytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          dataBytes[i] = binaryString.charCodeAt(i);
+        }
+      } else {
+        let resolvedPdfUrl = url;
+        if (resolvedPdfUrl.startsWith("/api/") || resolvedPdfUrl.startsWith("/uploads/")) {
+          resolvedPdfUrl = getApiUrl(resolvedPdfUrl);
+        } else if (
+          (resolvedPdfUrl.startsWith("http://") || resolvedPdfUrl.startsWith("https://")) &&
+          typeof window !== "undefined" &&
+          !resolvedPdfUrl.includes(window.location.host)
+        ) {
+          // Use proxy for remote external URLs to bypass CORS
+          resolvedPdfUrl = getApiUrl(`/api/pdf/proxy?url=${encodeURIComponent(resolvedPdfUrl)}`);
+        } else {
+          resolvedPdfUrl = getApiUrl(resolvedPdfUrl);
+        }
+
+        const res = await fetch(resolvedPdfUrl);
+        if (!res.ok) {
+          throw new Error(`Erreur réseau (${res.status}): Impossible de charger le fichier PDF`);
+        }
+        const buffer = await res.arrayBuffer();
+        dataBytes = new Uint8Array(buffer);
+      }
+
+      const loadingTask = pdfjsLib.getDocument({
+        data: dataBytes,
+        cMapUrl: `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version || "6.3.289"}/cmaps/`,
+        cMapPacked: true,
+      });
+
+      const doc = await loadingTask.promise;
+
+      setPdfDoc(doc);
+      setNumPages(doc.numPages);
+      setCurrentPage(1);
+      setLoading(false);
+
+      // Extract text asynchronously in background to not block rendering
+      if (onExtractText) {
+        setTimeout(async () => {
+          try {
+            const pagesText: string[] = [];
+            const maxPagesToScan = Math.min(doc.numPages, 20);
+            for (let pageNum = 1; pageNum <= maxPagesToScan; pageNum++) {
+              const page = await doc.getPage(pageNum);
+              const content = await page.getTextContent();
+              const pageStrings = content.items.map((item: any) => item.str).join(" ");
+              if (pageStrings.trim()) {
+                pagesText.push(`=== PAGE ${pageNum} ===\n${pageStrings}`);
+              }
+            }
+            if (pagesText.length > 0) {
+              onExtractText(pagesText.join("\n\n"));
+            }
+          } catch (textErr) {
+            console.warn("PDF text extraction warning:", textErr);
+          }
+        }, 100);
+      }
+    } catch (err: any) {
+      console.error("PDF.js loading error:", err);
+      setError(err?.message || "Impossible d'afficher le document dans le lecteur intégré.");
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadPdf();
+  }, [url]);
+
+  // Render single page when activeMode === "single"
+  useEffect(() => {
+    if (!pdfDoc || !singleCanvasRef.current || activeMode !== "single") return;
+    let isCancelled = false;
+
+    const renderPage = async () => {
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch (_) {}
+      }
+
+      try {
+        const page = await pdfDoc.getPage(currentPage);
+        if (isCancelled) return;
+
+        const canvas = singleCanvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const baseScale = 1.3;
+        const scale = baseScale * (zoom / 100);
+        const viewport = page.getViewport({ scale });
+        const dpr = window.devicePixelRatio || 1;
+
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+        const renderContext: any = {
+          canvasContext: ctx,
+          transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+          viewport: viewport
+        };
+
+        const task = page.render(renderContext);
+        renderTaskRef.current = task;
+        await task.promise;
+      } catch (e: any) {
+        if (e?.name !== "RenderingCancelledException") {
+          console.error("PDF page render error:", e);
+        }
+      }
+    };
+
+    renderPage();
+
+    return () => {
+      isCancelled = true;
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch (_) {}
+      }
+    };
+  }, [pdfDoc, currentPage, zoom, activeMode]);
+
+  if (useFallbackIframe) {
+    const directViewUrl = url.startsWith("http")
+      ? url
+      : typeof window !== "undefined"
+      ? `${window.location.origin}${url.startsWith("/") ? "" : "/"}${url}`
+      : getApiUrl(url);
+
+    return (
+      <div className="w-full h-full flex flex-col bg-gray-50 dark:bg-[#111923] overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 text-xs shrink-0">
+          <span className="font-bold text-gray-700 dark:text-gray-300">Lecteur PDF Navigateur</span>
+          <button
+            onClick={() => setUseFallbackIframe(false)}
+            className="px-2.5 py-1 bg-emerald-500 text-white rounded-lg text-xs font-bold hover:bg-emerald-600 transition-colors cursor-pointer"
+          >
+            Mode Studio HD
+          </button>
+        </div>
+        <iframe
+          src={directViewUrl}
+          className="w-full h-full border-0 bg-white"
+          title="Aperçu PDF Direct"
+        />
+      </div>
+    );
+  }
+
+  if (error) {
+    const directDownloadUrl = url.includes("/api/community/file/") ? `${url}/download` : url;
+    const directViewUrl = url.startsWith("http")
+      ? url
+      : typeof window !== "undefined"
+      ? `${window.location.origin}${url.startsWith("/") ? "" : "/"}${url}`
+      : getApiUrl(url);
+    const isLocalUrl = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || directViewUrl.includes("localhost") || directViewUrl.includes("127.0.0.1") || url.startsWith("data:"));
+    const googleDocsViewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(directViewUrl)}&embedded=true`;
+
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-between p-3 sm:p-5 text-center bg-gray-50 dark:bg-[#111923] overflow-y-auto">
+        <div className="w-full flex items-center justify-between gap-2 p-2 bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm shrink-0">
+          <div className="flex items-center gap-2 text-xs font-bold text-gray-800 dark:text-white">
+            <FileText size={18} className="text-red-500" />
+            <span>Document PDF</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              href={directDownloadUrl}
+              download="document.pdf"
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+            >
+              <Download size={13} />
+              <span>Télécharger</span>
+            </a>
+            {!isLocalUrl && (
+              <a
+                href={googleDocsViewerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+              >
+                <ExternalLink size={13} />
+                <span>Google Docs</span>
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={() => loadPdf()}
+              className="px-2.5 py-1.5 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-xl font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              <RotateCw size={13} />
+              <span>Réessayer</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Embedded Native Browser PDF view as guaranteed fallback */}
+        <div className="w-full flex-1 min-h-[300px] mt-3 rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800 shadow-md bg-white">
+          <iframe
+            src={directViewUrl}
+            className="w-full h-full border-0 bg-white"
+            title="Aperçu PDF Navigateur"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center w-full h-full overflow-hidden relative">
+      {/* FLOATING PAGE NAVIGATION & MODE CONTROLS */}
+      {numPages > 1 && (
+        <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 bg-white/95 dark:bg-gray-800/95 backdrop-blur-md px-3 sm:px-4 py-1.5 sm:py-2 rounded-2xl shadow-xl border border-gray-200/80 dark:border-gray-700/80 my-1 sm:my-2 z-20 shrink-0 max-w-[95%]">
+          {/* Previous Page Button */}
+          <button
+            disabled={currentPage <= 1}
+            onClick={() => scrollToPage(currentPage - 1)}
+            className="p-1 sm:p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:hover:bg-transparent text-gray-700 dark:text-gray-200 transition-colors cursor-pointer"
+            title="Page précédente"
+          >
+            <ChevronLeft size={17} />
+          </button>
+
+          {/* Current Page Counter & Input */}
+          <div className="flex items-center gap-1 sm:gap-1.5 text-xs font-black text-gray-900 dark:text-white">
+            <span className="hidden xs:inline">Page</span>
+            <input
+              type="number"
+              min={1}
+              max={numPages}
+              value={currentPage}
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                if (val >= 1 && val <= numPages) scrollToPage(val);
+              }}
+              className="w-10 sm:w-12 text-center bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg py-0.5 font-bold focus:outline-none text-xs"
+            />
+            <span>/ {numPages}</span>
+          </div>
+
+          {/* Next Page Button */}
+          <button
+            disabled={currentPage >= numPages}
+            onClick={() => scrollToPage(currentPage + 1)}
+            className="p-1 sm:p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:hover:bg-transparent text-gray-700 dark:text-gray-200 transition-colors cursor-pointer"
+            title="Page suivante"
+          >
+            <ChevronRight size={17} />
+          </button>
+
+          {/* Divider */}
+          <div className="h-4 w-px bg-gray-300 dark:bg-gray-700 mx-0.5 sm:mx-1" />
+
+          {/* View Mode Switcher Pill */}
+          <div className="flex items-center bg-gray-100 dark:bg-gray-900/80 p-0.5 rounded-xl border border-gray-200 dark:border-gray-700/60">
+            <button
+              type="button"
+              onClick={() => handleModeToggle("continuous")}
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                activeMode === "continuous"
+                  ? "bg-emerald-500 text-white shadow-xs"
+                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+              }`}
+              title="Défilement vertical continu (scroller toutes les pages)"
+            >
+              <ScrollText size={13} />
+              <span className="hidden sm:inline">Défilement continu</span>
+              <span className="sm:hidden">Vertical</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleModeToggle("single")}
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                activeMode === "single"
+                  ? "bg-emerald-500 text-white shadow-xs"
+                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+              }`}
+              title="Affichage page par page (feuilleter)"
+            >
+              <BookOpen size={13} />
+              <span className="hidden sm:inline">Page par page</span>
+              <span className="sm:hidden">1 Page</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setUseFallbackIframe(true)}
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-bold text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-all cursor-pointer"
+              title="Afficher avec le lecteur natif du navigateur"
+            >
+              <ExternalLink size={13} />
+              <span className="hidden sm:inline">Lecteur Web</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* LOADING INDICATOR */}
+      {loading && (
+        <div className="flex flex-col items-center justify-center my-auto p-8 gap-3">
+          <Loader2 className="animate-spin text-emerald-500" size={38} />
+          <p className="text-xs font-extrabold text-gray-600 dark:text-gray-300 animate-pulse">
+            Chargement instantané du document...
+          </p>
+        </div>
+      )}
+
+      {/* ERROR FALLBACK */}
+      {error && (
+        <div className="my-auto p-6 text-center bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/30 rounded-3xl max-w-md space-y-4">
+          <AlertTriangle size={36} className="mx-auto text-amber-500" />
+          <p className="text-xs font-bold text-amber-900 dark:text-amber-200 leading-relaxed">{error}</p>
+          <div className="flex justify-center gap-2">
+            <a
+              href={url}
+              download="document.pdf"
+              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl text-xs transition-colors flex items-center gap-1.5"
+            >
+              <Download size={14} />
+              <span>Télécharger le PDF</span>
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* RENDER BODY: CONTINUOUS OR SINGLE PAGE */}
+      {!loading && !error && (
+        activeMode === "continuous" ? (
+          <div
+            ref={scrollContainerRef}
+            className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-auto flex flex-col items-center p-2 sm:p-4 space-y-2 sm:space-y-4 scroll-smooth select-none"
+            style={{
+              touchAction: "pan-x pan-y",
+              WebkitOverflowScrolling: "touch",
+              overscrollBehaviorY: "contain"
+            }}
+          >
+            {Array.from({ length: numPages }, (_, i) => i + 1).map((pNum) => (
+              <PdfSinglePageItem
+                key={`pdf-page-${pNum}`}
+                pdfDoc={pdfDoc}
+                pageNum={pNum}
+                numPages={numPages}
+                zoom={zoom}
+                onIntersect={(activeNum) => setCurrentPage(activeNum)}
+              />
+            ))}
+
+            {/* Quick Scroll To Top Floating Button */}
+            {currentPage > 1 && (
+              <button
+                type="button"
+                onClick={() => scrollToPage(1)}
+                className="fixed bottom-6 right-6 sm:bottom-10 sm:right-10 p-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full shadow-2xl transition-all active:scale-95 z-30 flex items-center gap-1.5 text-xs font-bold cursor-pointer hover:shadow-emerald-500/40"
+                title="Remonter tout en haut (Page 1)"
+              >
+                <ArrowUp size={16} />
+                <span className="hidden sm:inline">Haut</span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <div
+            className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-auto flex flex-col items-center justify-start p-2 sm:p-4 select-none"
+            style={{
+              touchAction: "pan-x pan-y",
+              WebkitOverflowScrolling: "touch",
+              overscrollBehaviorY: "contain"
+            }}
+            onTouchStart={handleSingleTouchStart}
+            onTouchEnd={handleSingleTouchEnd}
+          >
+            <canvas
+              ref={singleCanvasRef}
+              className="shadow-2xl rounded-2xl bg-white border border-gray-200 dark:border-gray-800 max-w-full transition-shadow my-auto sm:my-0"
+              style={{ touchAction: "pan-x pan-y" }}
+            />
+          </div>
+        )
+      )}
+    </div>
+  );
+};
+
+export default Community;

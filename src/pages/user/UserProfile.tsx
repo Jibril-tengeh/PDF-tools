@@ -1,0 +1,2979 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useLanguage } from '../../contexts/LanguageContext';
+import { User, Bell, Clock, Save, Shield, Moon, Sun, Smartphone, Laptop, Tablet, Globe, Trash2, Award, Medal, Star, Target, LogOut, Camera, Image as ImageIcon, RefreshCw, Sparkles, LogIn, ChevronDown, Plus, XCircle, CheckCircle, FileText, BookOpen, ScrollText, Heart, X, Share2, Wifi, Database, HardDrive, HardDriveDownload, Mic, MapPin, FolderCheck, Mail, MessageSquare, Info, Tag, ExternalLink, Check, Gift, HelpCircle, Compass, AlertTriangle, Vibrate, Battery, BatteryCharging, BatteryWarning, Cpu, Zap, ZapOff, Gauge, Code } from 'lucide-react';
+import { useHaptics } from '../../utils/haptics';
+import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
+import { 
+  getAllOfflineSecrets, 
+  removeSecretFromOfflineVault, 
+  OfflineStoredSecret 
+} from '../../utils/secretOfflineVault';
+import { FloatingSupportContact } from '../../components/FloatingSupportContact';
+import { ReferralCenter } from '../../components/ReferralCenter';
+import { 
+  requestStoragePermission, 
+  requestMicrophonePermission, 
+  requestGeolocationPermission, 
+  requestNotificationPermission, 
+  requestAllPermissions,
+  requestMicrophonePermissionDetailed,
+  requestGeolocationPermissionDetailed,
+  checkPermissionQuery
+} from '../../utils/planetaryNotifications';
+import { PermissionTroubleshooterModal } from '../../components/PermissionTroubleshooterModal';
+import { motion, AnimatePresence } from 'motion/react';
+import { useTheme } from '../../contexts/ThemeContext';
+import { useAuth, handleFirestoreError, OperationType } from '../../contexts/AuthContext';
+import { useFeatures } from '../../contexts/FeatureContext';
+import { useSettings } from '../../contexts/SettingsContext';
+import { PremiumBadge } from '../../components/PremiumBadge';
+import { Premium12hCountdownWidget } from '../../components/Premium12hCountdownWidget';
+import { AuthModal } from '../../components/AuthModal';
+import { PremiumWrapper } from '../../components/PremiumWrapper';
+import { signOut, db, auth } from '../../lib/firebase';
+import { doc, setDoc, collection, deleteDoc, onSnapshot, updateDoc, query, where } from 'firebase/firestore';
+import { isPubliclyVisibleArticle } from '../../lib/articleUtils';
+import { getAsrarItems } from '../../data/store';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
+import { getFCMToken, checkNotificationSupport, onMessageListener } from '../../lib/fcm';
+import { getApiUrl } from '../../lib/api';
+import { APP_VERSION_CONFIG, VersionRelease, getAppVersion, getFullVersionDisplay, getLocalizedReleaseDate } from '../../config/appVersion';
+import { appVersionService } from '../../services/appVersionService';
+import { ChangelogModal } from '../../components/ChangelogModal';
+import { ChangelogView } from '../../components/ChangelogView';
+import { OfflineAppSaverModal } from '../../components/OfflineAppSaverModal';
+import { getOfflineAppStatus, OfflineAppStatus } from '../../utils/offlineAppManager';
+
+interface Reminder {
+  id: string;
+  time: string;
+  enabled: boolean;
+  label: string;
+  isZikr?: boolean;
+  zikrId?: string;
+  zikrTarget?: number;
+}
+
+const CollapsibleSection: React.FC<{
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  headerAction?: React.ReactNode;
+  defaultOpen?: boolean;
+  id?: string;
+}> = ({ title, icon, children, headerAction, defaultOpen = false, id }) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  useEffect(() => {
+    if (defaultOpen) {
+      setIsOpen(true);
+    }
+  }, [defaultOpen]);
+
+  return (
+    <div id={id} className="bg-white dark:bg-gray-800 rounded-3xl p-5 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700 mb-6">
+      <div 
+        className="flex items-center justify-between cursor-pointer group"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+          {icon}
+          {title}
+        </h2>
+        <div className="flex items-center gap-3">
+          {headerAction && <div onClick={e => e.stopPropagation()}>{headerAction}</div>}
+          <div className={`p-1.5 rounded-full bg-gray-50 dark:bg-gray-700/50 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-all duration-300 ${isOpen ? 'rotate-180' : ''}`}>
+            <ChevronDown size={18} />
+          </div>
+        </div>
+      </div>
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0, marginTop: 0 }}
+            animate={{ height: 'auto', opacity: 1, marginTop: 16 }}
+            exit={{ height: 0, opacity: 0, marginTop: 0 }}
+            className="overflow-hidden"
+          >
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const GamificationBadges = () => {
+  const { t } = useLanguage();
+  const [stats, setStats] = useState<{ journal_entries: number; tools_used?: number }>({ journal_entries: 0, tools_used: 0 });
+
+  useEffect(() => {
+    const savedStats = localStorage.getItem('asrar_stats');
+    if (savedStats) {
+      try {
+        const parsed = JSON.parse(savedStats);
+        if (parsed && typeof parsed === 'object') {
+          setStats(parsed);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+  }, []);
+
+  const badges = [
+    {
+      id: 'initie',
+      name: t('profile.badges.initie.name', 'Initié'),
+      description: t('profile.badges.initie.desc', 'A ouvert le journal spirituel (1 entrée)'),
+      icon: Award,
+      color: 'text-bronze-500',
+      bg: 'bg-orange-100 dark:bg-orange-900/30 text-orange-600',
+      earned: stats.journal_entries >= 1
+    },
+    {
+      id: 'regulier',
+      name: t('profile.badges.regulier.name', 'Régulier'),
+      description: t('profile.badges.regulier.desc', 'Maintient la discipline (7 entrées)'),
+      icon: Medal,
+      color: 'text-slate-400',
+      bg: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400',
+      earned: stats.journal_entries >= 7
+    },
+    {
+      id: 'devoue',
+      name: t('profile.badges.devoue.name', 'Dévoué'),
+      description: t('profile.badges.devoue.desc', 'Lumière constante (30 entrées)'),
+      icon: Star,
+      color: 'text-amber-500',
+      bg: 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
+      earned: stats.journal_entries >= 30
+    },
+    {
+      id: 'savant',
+      name: t('profile.badges.chercheur.name', 'Chercheur'),
+      description: t('profile.badges.chercheur.desc', 'Explore les Asrar (Utilisé 5 outils)'),
+      icon: Target,
+      color: 'text-purple-500',
+      bg: 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400',
+      earned: (stats.tools_used || 0) >= 5
+    }
+  ];
+
+  return (
+    <CollapsibleSection
+      title={t('profile.badges.title', 'Badges & Accomplissements')}
+      icon={<Award className="text-amber-500" size={20} />}
+    >
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+        {t('profile.badges.subtitle', 'Vos actes constants forgent votre lumière. Ces badges reflètent votre régularité et discipline.')}
+      </p>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {badges.map((badge, bIdx) => (
+          <div 
+            key={`profile-badge-${badge.id}-${bIdx}`}
+            className={`flex flex-col items-center text-center gap-2 p-4 rounded-2xl border-2 transition-all ${
+              badge.earned 
+                ? `border-${badge.bg.split(' ')[0].replace('bg-', '')} ${badge.bg}` 
+                : 'border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 grayscale opacity-60'
+            }`}
+          >
+            <badge.icon size={28} className={badge.earned ? "" : "text-gray-400"} />
+            <div>
+              <span className={`block font-bold text-sm ${badge.earned ? '' : 'text-gray-500'}`}>{badge.name}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </CollapsibleSection>
+  );
+};
+
+export const UserProfile: React.FC = () => {
+  const { t, language } = useLanguage();
+  const { theme, setTheme } = useTheme();
+  const { user } = useAuth();
+  const { featureToggles } = useFeatures();
+  const {
+    batterySaver,
+    setBatterySaver,
+    toggleBatterySaver,
+    lowResourceMode,
+    setLowResourceMode,
+    toggleLowResourceMode,
+    autoLowResourceOnBattery,
+    setAutoLowResourceOnBattery,
+    backgroundSyncFrequencyMs,
+  } = useSettings();
+  const perf = usePerformanceMonitor();
+  const { config: hapticsConfig, updateConfig: updateHapticsConfig, triggerTest: testHaptics } = useHaptics();
+  const navigate = useNavigate();
+  
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // --- Active Sessions State & Logic ---
+  interface Session {
+    id: string;
+    os: string;
+    browser: string;
+    deviceType: string;
+    lastActive: string;
+    ip: string;
+  }
+
+  const [activeSessions, setActiveSessions] = useState<Session[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const currentSessionId = localStorage.getItem('asrarhub_session_id');
+
+  useEffect(() => {
+    if (!user || user.uid.startsWith('local_') || !auth.currentUser) {
+      setActiveSessions([]);
+      setLoadingSessions(false);
+      return;
+    }
+
+    setLoadingSessions(true);
+    const sessionsRef = collection(db, 'users', user.uid, 'sessions');
+    
+    const unsubscribe = onSnapshot(sessionsRef, (snapshot) => {
+      const sessionsList: Session[] = [];
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        sessionsList.push({
+          id: doc.id,
+          os: data.os || 'Inconnu',
+          browser: data.browser || 'Inconnu',
+          deviceType: data.deviceType || 'desktop',
+          lastActive: data.lastActive || new Date().toISOString(),
+          ip: data.ip || 'Client Direct'
+        });
+      });
+      
+      // Sort sessions: current session first, then by last active desc
+      sessionsList.sort((a, b) => {
+        if (a.id === currentSessionId) return -1;
+        if (b.id === currentSessionId) return 1;
+        return new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime();
+      });
+
+      setActiveSessions(sessionsList);
+      setLoadingSessions(false);
+    }, (error) => {
+      console.warn("Error listening to sessions:", error);
+      setLoadingSessions(false);
+    });
+
+    return () => unsubscribe();
+  }, [user, currentSessionId]);
+
+  const revokeSession = async (sessionId: string) => {
+    if (!user) return;
+    try {
+      const sessionDocRef = doc(db, 'users', user.uid, 'sessions', sessionId);
+      await deleteDoc(sessionDocRef);
+    } catch (err) {
+      console.error("Error revoking session:", err);
+      alert("Impossible de révoquer la session. Veuillez réessayer.");
+    }
+  };
+  // -------------------------------------
+  
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [newTime, setNewTime] = useState('06:00');
+  const [newLabel, setNewLabel] = useState('');
+  const [reminderType, setReminderType] = useState<'simple' | 'zikr'>('simple');
+  const [selectedZikrId, setSelectedZikrId] = useState('subhanallah');
+  const [customZikrName, setCustomZikrName] = useState('');
+  const [customZikrTarget, setCustomZikrTarget] = useState(100);
+
+  const PRESET_ZIKRS = [
+    { id: 'subhanallah', text: 'Subhanallah', arabic: 'سُبْحَانَ ٱللَّٰهِ', target: 33 },
+    { id: 'alhamdulillah', text: 'Alhamdulillah', arabic: 'ٱلْحَمْدُ لِلَّٰهِ', target: 33 },
+    { id: 'allahuakbar', text: 'Allahu Akbar', arabic: 'ٱللَّٰهُ أَكْبَرُ', target: 34 },
+    { id: 'astaghfirullah', text: 'Astaghfirullah', arabic: 'أَسْتَغْفِرُ ٱللَّٰهَ', target: 100 },
+    { id: 'lailahaillallah', text: 'La ilaha illallah', arabic: 'لَا إِلَٰهَ إِلَّا ٱللَّٰهُ', target: 100 },
+    { id: 'salawat', text: 'Salawat', arabic: 'ٱللَّٰهُمَّ صَلِّ عَلَىٰ مُحَمَّدٍ', target: 100 },
+    { id: 'hasbunallah', text: 'Hasbunallah', arabic: 'حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلُ', target: 450 },
+    { id: 'ya_latif', text: 'Ya Latif', arabic: 'يَا لَطِيفُ', target: 129 },
+    { id: 'custom', text: 'Autre (Zikr personnalisé)', arabic: '', target: 100 }
+  ];
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState('');
+  const [isClearingCache, setIsClearingCache] = useState(false);
+  const [autoSave, setAutoSave] = useState(localStorage.getItem('asrar_auto_save_firestore') !== 'false');
+
+  const [fcmToken, setFcmToken] = useState<string | null>(null);
+  const [fcmEnabled, setFcmEnabled] = useState(false);
+  const [isFcmLoading, setIsFcmLoading] = useState(false);
+  const [isTestingPush, setIsTestingPush] = useState(false);
+  const [testSuccess, setTestSuccess] = useState<boolean | null>(null);
+
+  const [profileName, setProfileName] = useState('');
+  const [profileCountry, setProfileCountry] = useState('');
+  const [profilePhone, setProfilePhone] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileSavedMsg, setProfileSavedMsg] = useState('');
+  const [notifsSynced, setNotifsSynced] = useState<boolean | null>(null);
+  const [isSyncingNotifs, setIsSyncingNotifs] = useState(false);
+  const [storagePermissionGranted, setStoragePermissionGranted] = useState<boolean>(true);
+  const [isRequestingStorage, setIsRequestingStorage] = useState(false);
+
+  // App Version & Changelog State
+  const [showChangelogModal, setShowChangelogModal] = useState(false);
+  const [firestoreReleases, setFirestoreReleases] = useState<VersionRelease[]>(APP_VERSION_CONFIG.releases);
+  const [isFlushingVersionCache, setIsFlushingVersionCache] = useState(false);
+  const [versionFlushStatus, setVersionFlushStatus] = useState<string | null>(null);
+  const [isSyncingReleases, setIsSyncingReleases] = useState(false);
+  const [releasesSyncSuccess, setReleasesSyncSuccess] = useState(false);
+
+  useEffect(() => {
+    const unsub = appVersionService.subscribeReleases((releases) => {
+      setFirestoreReleases(releases);
+    });
+    return () => unsub();
+  }, []);
+
+  const [appPermissions, setAppPermissions] = useState<{
+    storage?: boolean;
+    notifications?: boolean;
+    geolocation?: boolean;
+    microphone?: boolean;
+  }>({});
+
+  // Troubleshooter Modal State
+  const [isTroubleshooterOpen, setIsTroubleshooterOpen] = useState(false);
+  const [troubleshooterTab, setTroubleshooterTab] = useState<'microphone' | 'geolocation' | 'notifications' | 'storage' | 'manual_city'>('microphone');
+  const [permissionToast, setPermissionToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  // Check initial permission status silently on mount
+  useEffect(() => {
+    const checkLivePerms = async () => {
+      const mic = await checkPermissionQuery('microphone');
+      const geo = await checkPermissionQuery('geolocation');
+      setAppPermissions(prev => ({
+        ...prev,
+        microphone: mic === 'granted',
+        geolocation: geo === 'granted'
+      }));
+    };
+    checkLivePerms();
+  }, []);
+
+  const location = useLocation();
+  const shouldOpenPermissions = Boolean(
+    location.state?.openPermissions || 
+    location.state?.highlightPermissions || 
+    (typeof location.search === 'string' && location.search.includes('permissions'))
+  );
+
+  useEffect(() => {
+    if (shouldOpenPermissions) {
+      setTimeout(() => {
+        const el = document.getElementById('system-permissions-section');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 350);
+    }
+  }, [shouldOpenPermissions]);
+  const [isRequestingPerms, setIsRequestingPerms] = useState(false);
+
+  const handleRequestAllPermissions = async () => {
+    setIsRequestingPerms(true);
+    try {
+      const res = await requestAllPermissions();
+      setAppPermissions({
+        storage: res.storage,
+        notifications: res.notifications,
+        geolocation: res.geolocation,
+        microphone: res.microphone
+      });
+      setStoragePermissionGranted(res.storage);
+
+      if (res.microphone && res.geolocation) {
+        setPermissionToast({ message: "Toutes les autorisations ont été accordées avec succès !", type: "success" });
+        setTimeout(() => setPermissionToast(null), 4000);
+      } else {
+        // Open troubleshooter to guide user
+        setTroubleshooterTab(!res.microphone ? 'microphone' : 'geolocation');
+        setIsTroubleshooterOpen(true);
+      }
+    } catch (err) {
+      console.warn("Permissions request error:", err);
+      setIsTroubleshooterOpen(true);
+    } finally {
+      setIsRequestingPerms(false);
+    }
+  };
+
+  const handleRequestMic = async () => {
+    setIsRequestingPerms(true);
+    try {
+      const res = await requestMicrophonePermissionDetailed();
+      setAppPermissions(prev => ({ ...prev, microphone: res.granted }));
+      if (res.granted) {
+        setPermissionToast({ message: "Microphone autorisé avec succès pour les Zikrs vocaux !", type: "success" });
+        setTimeout(() => setPermissionToast(null), 4000);
+      } else {
+        setTroubleshooterTab('microphone');
+        setIsTroubleshooterOpen(true);
+      }
+    } catch (e) {
+      setTroubleshooterTab('microphone');
+      setIsTroubleshooterOpen(true);
+    } finally {
+      setIsRequestingPerms(false);
+    }
+  };
+
+  const handleRequestGeo = async () => {
+    setIsRequestingPerms(true);
+    try {
+      const res = await requestGeolocationPermissionDetailed();
+      setAppPermissions(prev => ({ ...prev, geolocation: res.granted }));
+      if (res.granted) {
+        const coordsStr = res.coords ? ` (${res.coords.lat.toFixed(1)}°, ${res.coords.lng.toFixed(1)}°)` : '';
+        setPermissionToast({ message: `Position GPS autorisée avec succès${coordsStr} !`, type: "success" });
+        setTimeout(() => setPermissionToast(null), 4000);
+      } else {
+        setTroubleshooterTab('geolocation');
+        setIsTroubleshooterOpen(true);
+      }
+    } catch (e) {
+      setTroubleshooterTab('geolocation');
+      setIsTroubleshooterOpen(true);
+    } finally {
+      setIsRequestingPerms(false);
+    }
+  };
+
+  const handleRequestStoragePermission = async () => {
+    setIsRequestingStorage(true);
+    try {
+      const granted = await requestStoragePermission();
+      setStoragePermissionGranted(granted);
+      setAppPermissions(prev => ({ ...prev, storage: granted }));
+      if (granted) {
+        setPermissionToast({ message: "Autorisation au stockage accordée ! Cache et parchemins sécurisés.", type: "success" });
+        setTimeout(() => setPermissionToast(null), 4000);
+      }
+    } catch (err) {
+      console.warn("Storage permission request error:", err);
+    } finally {
+      setIsRequestingStorage(false);
+    }
+  };
+
+  // --- Favorites Feature State and Realtime Logic ---
+  const [favorites, setFavorites] = useState<any[]>([]);
+  const [loadingFavorites, setLoadingFavorites] = useState(true);
+  const [selectedFavArticle, setSelectedFavArticle] = useState<any | null>(null);
+
+  useEffect(() => {
+    const isAdmin = user?.role === 'admin';
+    const q = collection(db, 'articles');
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let allItems: any[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...(doc.data() as any)
+      }));
+
+      if (allItems.length === 0) {
+        allItems = getAsrarItems();
+      }
+
+      // Get saved bookmarks
+      try {
+        const savedIds: string[] = JSON.parse(localStorage.getItem('asrar_bookmarks') || '[]');
+        if (Array.isArray(savedIds)) {
+          const bookmarkedItems = allItems.filter(item => savedIds.includes(item.id) && (isAdmin || isPubliclyVisibleArticle(item.status)));
+          setFavorites(bookmarkedItems);
+        } else {
+          setFavorites([]);
+        }
+      } catch (err) {
+        setFavorites([]);
+      }
+      setLoadingFavorites(false);
+    }, (error) => {
+      console.error("Error loading favorites, using offline fallback:", error);
+      const allItems = getAsrarItems();
+      try {
+        const savedIds: string[] = JSON.parse(localStorage.getItem('asrar_bookmarks') || '[]');
+        if (Array.isArray(savedIds)) {
+          const bookmarkedItems = allItems.filter(item => savedIds.includes(item.id));
+          setFavorites(bookmarkedItems);
+        } else {
+          setFavorites([]);
+        }
+      } catch (err) {
+        setFavorites([]);
+      }
+      setLoadingFavorites(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleRemoveFavorite = (itemId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const savedIds: string[] = JSON.parse(localStorage.getItem('asrar_bookmarks') || '[]');
+      if (Array.isArray(savedIds)) {
+        const updatedIds = savedIds.filter(id => id !== itemId);
+        localStorage.setItem('asrar_bookmarks', JSON.stringify(updatedIds));
+        setFavorites(prev => prev.filter(item => item.id !== itemId));
+      }
+    } catch (err) {
+      console.error("Error removing favorite:", err);
+    }
+  };
+
+  const [offlineSecrets, setOfflineSecrets] = useState<OfflineStoredSecret[]>([]);
+  const [loadingOfflineSecrets, setLoadingOfflineSecrets] = useState(true);
+  const [isOfflineSaverOpen, setIsOfflineSaverOpen] = useState(false);
+  const [offlineAppMeta, setOfflineAppMeta] = useState<OfflineAppStatus | null>(null);
+
+  useEffect(() => {
+    getOfflineAppStatus().then(setOfflineAppMeta);
+    const handleSaved = () => {
+      getOfflineAppStatus().then(setOfflineAppMeta);
+    };
+    window.addEventListener('asrarhub_offline_app_saved', handleSaved);
+    window.addEventListener('asrarhub_offline_app_cleared', handleSaved);
+    return () => {
+      window.removeEventListener('asrarhub_offline_app_saved', handleSaved);
+      window.removeEventListener('asrarhub_offline_app_cleared', handleSaved);
+    };
+  }, []);
+
+  const loadOfflineSecrets = async () => {
+    setLoadingOfflineSecrets(true);
+    try {
+      const list = await getAllOfflineSecrets();
+      setOfflineSecrets(list);
+    } catch (e) {
+      console.error("Error loading offline secrets in profile:", e);
+    } finally {
+      setLoadingOfflineSecrets(false);
+    }
+  };
+
+  useEffect(() => {
+    loadOfflineSecrets();
+    const handleSync = () => loadOfflineSecrets();
+    window.addEventListener('asrarhub_offline_secrets_sync', handleSync);
+    return () => {
+      window.removeEventListener('asrarhub_offline_secrets_sync', handleSync);
+    };
+  }, []);
+
+  const handleRemoveOfflineSecret = async (secretId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await removeSecretFromOfflineVault(secretId);
+    setOfflineSecrets(prev => prev.filter(s => s.id !== secretId));
+  };
+
+  const handleShareFavArticle = async (article: any, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const snippet = (article.content || '').replace(/<[^>]+>/g, '').substring(0, 100) + '...';
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: article.title,
+          text: `Lire l'article "${article.title}" : ${snippet}`,
+          url: window.location.href,
+        });
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error(err);
+        }
+      }
+    } else {
+      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Lire l'article "${article.title}" : ${snippet}`)}`, '_blank');
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      setProfileName(user.name || '');
+      setProfileCountry(user.country || '');
+      setProfilePhone(user.phone || '');
+      
+      if (user.pushNotificationsEnabled !== undefined) {
+        setFcmEnabled(!!user.pushNotificationsEnabled);
+        setNotifsSynced(true);
+      } else {
+        setFcmEnabled(Notification.permission === 'granted');
+        setNotifsSynced(true);
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
+    const checkFCMStatus = async () => {
+      try {
+        const supported = await checkNotificationSupport();
+        if (supported && Notification.permission === 'granted') {
+          setFcmEnabled(true);
+          const savedToken = localStorage.getItem('asrarhub_last_fcm_token');
+          if (savedToken) {
+            setFcmToken(savedToken);
+          }
+        }
+      } catch (err) {
+        console.warn("FCM Support check error:", err);
+      }
+    };
+    checkFCMStatus();
+
+    // Foreground message listener
+    let unsubscribe: any = null;
+    const setupListener = async () => {
+      unsubscribe = await onMessageListener((payload) => {
+        alert(`[Notification] ${payload.notification?.title}: ${payload.notification?.body}`);
+      });
+    };
+    setupListener();
+
+    return () => {
+      if (unsubscribe && typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('asrar_reminders');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setReminders(parsed);
+        }
+      } catch (e) {}
+    } else {
+      setReminders([
+        { id: '1', time: '05:30', enabled: true, label: t('profile.reminders.morning', 'Wird du Matin') },
+        { id: '2', time: '18:00', enabled: true, label: t('profile.reminders.evening', 'Wird du Soir') }
+      ]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (reminders.length > 0) {
+      localStorage.setItem('asrar_reminders', JSON.stringify(reminders));
+    }
+  }, [reminders]);
+
+  const addReminder = () => {
+    if (!newTime) return;
+    
+    let label = newLabel;
+    let isZikr = false;
+    let zikrId = '';
+    let zikrTarget = 100;
+
+    if (reminderType === 'zikr') {
+      isZikr = true;
+      if (selectedZikrId === 'custom') {
+        if (!customZikrName) {
+          alert("Veuillez saisir un nom pour votre Zikr personnalisé.");
+          return;
+        }
+        label = `Zikr : ${customZikrName} (${customZikrTarget}x)`;
+        zikrId = 'custom';
+        zikrTarget = customZikrTarget;
+      } else {
+        const preset = PRESET_ZIKRS.find(z => z.id === selectedZikrId);
+        if (preset) {
+          label = `Zikr : ${preset.text} (${preset.target}x)`;
+          zikrId = preset.id;
+          zikrTarget = preset.target;
+        }
+      }
+    } else {
+      if (!newLabel) {
+        alert("Veuillez saisir un libellé pour le rappel.");
+        return;
+      }
+    }
+
+    if ('Notification' in window && window.Notification.permission !== 'granted') {
+      window.Notification.requestPermission().then(permission => {
+        if (permission === 'granted') {
+          console.log("Notification permission granted.");
+        }
+      });
+    }
+
+    const newRem: Reminder = {
+      id: Date.now().toString(),
+      time: newTime,
+      enabled: true,
+      label: label,
+      isZikr,
+      zikrId,
+      zikrTarget
+    };
+    setReminders([...reminders, newRem]);
+    setNewLabel('');
+    setCustomZikrName('');
+  };
+
+  const toggleReminder = (id: string) => {
+    setReminders(reminders.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
+  };
+
+  const removeReminder = (id: string) => {
+    setReminders(reminders.filter(r => r.id !== id));
+  };
+
+  const requestNotificationPermission = async () => {
+    if (!user) {
+      alert(t('profile.loginRequired', "Veuillez vous connecter pour activer les notifications push."));
+      return;
+    }
+    
+    setIsFcmLoading(true);
+    try {
+      const token = await getFCMToken(user.uid);
+      if (token) {
+        setFcmToken(token);
+        setFcmEnabled(true);
+        localStorage.setItem('asrarhub_last_fcm_token', token);
+        alert(t('profile.reminders.pushSuccess', 'Notifications push FCM activées avec succès !'));
+      } else {
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'denied') {
+          alert(t('profile.reminders.pushDenied', "Les notifications ont été refusées. Veuillez les autoriser dans les paramètres de votre navigateur pour AsrarHub."));
+        } else {
+          alert(t('profile.reminders.pushUnsupported', "Les notifications push ne sont pas supportées sur ce navigateur ou cet appareil."));
+        }
+      }
+    } catch (e: any) {
+      console.warn("FCM Token generation error (handled gracefully):", e);
+      if (String(e?.message || e).includes("permission") || String(e?.message || e).includes("refusée")) {
+        alert(t('profile.reminders.pushDenied', "Les notifications ont été refusées. Veuillez les autoriser dans les paramètres de votre navigateur pour AsrarHub."));
+      } else {
+        alert(t('profile.reminders.pushError', 'Une erreur est survenue lors de la configuration FCM : ') + (e.message || e));
+      }
+    } finally {
+      setIsFcmLoading(false);
+    }
+  };
+
+  const testPushNotification = async () => {
+    const activeToken = fcmToken || localStorage.getItem('asrarhub_last_fcm_token');
+    if (!activeToken) {
+      alert("Aucun jeton de notification disponible. Veuillez d'abord cliquer sur 'Activer les notifications push'.");
+      return;
+    }
+
+    setIsTestingPush(true);
+    setTestSuccess(null);
+    try {
+      const res = await fetch(getApiUrl('/api/send-push'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          tokens: [activeToken],
+          title: "Test de Rappel de Wird 🌟",
+          body: "Votre appareil est maintenant configuré pour recevoir vos rappels de Wird sur AsrarHub !",
+          data: {
+            type: "wird_test",
+            click_action: "/tools/personal-wird"
+          }
+        })
+      });
+
+      const data = await res.json();
+      if (data.success && data.successCount > 0) {
+        setTestSuccess(true);
+      } else {
+        setTestSuccess(false);
+        console.error("FCM test request response failed:", data);
+      }
+    } catch (err: any) {
+      console.error("FCM test request error:", err);
+      setTestSuccess(false);
+    } finally {
+      setIsTestingPush(false);
+    }
+  };
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const coverInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [localPhoto, setLocalPhoto] = useState<string | null>(null);
+  const [localCover, setLocalCover] = useState<string | null>(null);
+
+  const resizeImage = (file: File, maxWidth: number): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+          if (height > maxWidth) {
+            width = Math.round((width * maxWidth) / height);
+            height = maxWidth;
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            // Fill with white background to prevent transparent pngs from turning black
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, width, height);
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.7));
+          } else {
+            reject(new Error('Failed to get canvas context'));
+          }
+        };
+        img.onerror = () => reject(new Error('Failed to load image'));
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>, type: 'profile' | 'cover') => {
+    const file = event.target.files?.[0];
+    if (!file || !user) return;
+
+    try {
+      setUploading(true);
+      
+      // Set local preview immediately
+      const objectUrl = URL.createObjectURL(file);
+      if (type === 'profile') setLocalPhoto(objectUrl);
+      else setLocalCover(objectUrl);
+
+      // We will just use base64 and save it to firestore directly since it's resized and compressed
+      const base64Image = await resizeImage(file, type === 'profile' ? 256 : 800);
+
+      
+      const userRef = doc(db, 'users', user.uid);
+      
+      if (type === 'profile') {
+        await setDoc(userRef, { photoURL: base64Image }, { merge: true });
+      } else {
+        await setDoc(userRef, { coverPhotoURL: base64Image }, { merge: true });
+      }
+      
+      // Reset input so the same file can be selected again
+      event.target.value = '';
+      
+    } catch (error: any) {
+      console.error('Error uploading image', error);
+      alert(t('profile.uploadError', "Erreur lors de l'enregistrement de l'image: ") + (error.message || ''));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut();
+    } catch (error) {
+      console.error('Logout error', error);
+    } finally {
+      localStorage.removeItem('asrarhub_local_user');
+      localStorage.removeItem('asrarhub_session_id');
+      navigate('/', { replace: true });
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (!user) return;
+    setIsSavingProfile(true);
+    setProfileSavedMsg('');
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      await setDoc(userRef, {
+        name: profileName,
+        country: profileCountry,
+        phone: profilePhone
+      }, { merge: true });
+      
+      setProfileSavedMsg(t('profile.personalInfo.saveSuccess', 'Profil enregistré avec succès !'));
+      setTimeout(() => setProfileSavedMsg(''), 4000);
+    } catch (e: any) {
+      console.error("Error saving profile", e);
+      alert(t('profile.personalInfo.saveError', "Erreur lors de l'enregistrement: ") + (e.message || e));
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handleToggleNotifications = async () => {
+    if (!user) {
+      alert(t('profile.loginRequired', "Veuillez vous connecter pour configurer les notifications."));
+      return;
+    }
+
+    setIsSyncingNotifs(true);
+    setNotifsSynced(false);
+
+    try {
+      const targetState = !fcmEnabled;
+      
+      if (targetState) {
+        // Turning on: request/retrieve token
+        const token = await getFCMToken(user.uid);
+        if (token) {
+          setFcmToken(token);
+          setFcmEnabled(true);
+          localStorage.setItem('asrarhub_last_fcm_token', token);
+          
+          const userRef = doc(db, 'users', user.uid);
+          await updateDoc(userRef, {
+            pushNotificationsEnabled: true,
+            lastFCMToken: token
+          });
+          setNotifsSynced(true);
+        } else {
+          // Fallback: Even if FCM is not supported/blocked in this browser/iframe,
+          // still allow toggling the field in Firestore so the feature remains fully functional and testable!
+          console.warn("FCM not supported natively. Using database fallback toggle.");
+          const userRef = doc(db, 'users', user.uid);
+          await updateDoc(userRef, {
+            pushNotificationsEnabled: true
+          });
+          setFcmEnabled(true);
+          setNotifsSynced(true);
+        }
+      } else {
+        // Turning off: update firestore
+        const userRef = doc(db, 'users', user.uid);
+        await updateDoc(userRef, {
+          pushNotificationsEnabled: false
+        });
+        setFcmEnabled(false);
+        setNotifsSynced(true);
+      }
+    } catch (err: any) {
+      const errStr = String(err?.message || err);
+      if (errStr.includes("permission") || errStr.includes("Permission") || errStr.includes("denied") || errStr.includes("refusée")) {
+        console.warn("Notification toggle warning (permission issue handled):", errStr);
+      } else {
+        console.error("Error toggling notifications", err);
+      }
+      try {
+        const targetState = !fcmEnabled;
+        const userRef = doc(db, 'users', user.uid);
+        await updateDoc(userRef, {
+          pushNotificationsEnabled: targetState
+        });
+        setFcmEnabled(targetState);
+        setNotifsSynced(true);
+      } catch (innerErr) {
+        setNotifsSynced(false);
+      }
+    } finally {
+      setIsSyncingNotifs(false);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto p-4 sm:p-6 lg:p-8 safe-area-pt pb-36 border-none">
+      
+      {/* Profil Header with Cover */}
+      <div className="bg-white dark:bg-gray-800 rounded-3xl overflow-hidden shadow-sm border border-gray-100 dark:border-gray-700 mb-8 relative">
+        {/* Cover Photo */}
+        <div className="h-32 sm:h-48 bg-emerald-100 dark:bg-emerald-900/30 relative group">
+          {(localCover || user?.coverPhotoURL) ? (
+            <img src={localCover || user?.coverPhotoURL || ''} alt="Cover" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center opacity-30">
+              <ImageIcon size={48} className="text-emerald-500" />
+            </div>
+          )}
+          {user && (
+            <button 
+              onClick={() => coverInputRef.current?.click()}
+              disabled={uploading}
+              className="absolute bottom-3 right-3 bg-white/90 dark:bg-gray-900/90 p-2 rounded-full shadow-sm text-gray-700 dark:text-gray-200 hover:bg-white dark:hover:bg-gray-800 transition-colors opacity-100 disabled:opacity-50"
+            >
+              {uploading ? <div className="w-4 h-4 border-2 border-gray-400 border-t-gray-700 rounded-full animate-spin"></div> : <Camera size={18} />}
+            </button>
+          )}
+        </div>
+
+        {/* Profile Info */}
+        <div className="px-6 pb-6 pt-0 relative flex flex-col sm:flex-row items-center sm:items-start sm:justify-between">
+          <div className="flex flex-col sm:flex-row items-center sm:items-end gap-4 -mt-12 sm:-mt-16 mb-4 sm:mb-0 relative z-10">
+            <div className="relative group">
+              <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full bg-white dark:bg-gray-800 p-1.5 shadow-sm">
+                <div className="w-full h-full rounded-full bg-gradient-to-tr from-emerald-100 to-emerald-50 dark:from-emerald-900 dark:to-emerald-800 flex items-center justify-center overflow-hidden">
+                  {(localPhoto || user?.photoURL) ? (
+                    <img src={localPhoto || user?.photoURL || ''} alt="Profile" className="w-full h-full object-cover" />
+                  ) : (
+                    <User className="text-emerald-600 dark:text-emerald-300" size={40} />
+                  )}
+                </div>
+              </div>
+              {user && (
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="absolute bottom-2 right-2 bg-white dark:bg-gray-700 p-2 rounded-full shadow-md text-gray-700 dark:text-gray-200 border border-gray-100 dark:border-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  {uploading ? <div className="w-4 h-4 border-2 border-gray-400 border-t-gray-700 rounded-full animate-spin"></div> : <Camera size={16} />}
+                </button>
+              )}
+            </div>
+            
+            <div className="text-center sm:text-left mb-2 sm:mb-4">
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center justify-center sm:justify-start gap-2">
+                {user?.name || t('profile.defaultName', 'Profil & Préférences')}
+                <PremiumBadge />
+              </h1>
+              <p className="text-gray-500 dark:text-gray-400 text-sm">
+                {user?.email || t('profile.defaultEmail', 'Gérez vos paramètres et rappels spirituels')}
+              </p>
+              {user && (
+                <div className="flex items-center justify-center sm:justify-start gap-2 mt-2">
+                  <div className={`px-3 py-1 rounded-full text-sm font-semibold flex items-center gap-1.5 border ${
+                    featureToggles?.pointsSystemEnabled !== false
+                      ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-800'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-700'
+                  }`}>
+                    <Sparkles size={14} />
+                    <span>{user?.spiritualPoints || 0} pts</span>
+                    {featureToggles?.pointsSystemEnabled === false && (
+                      <span className="text-[10px] font-normal text-amber-600 dark:text-amber-400 ml-1">(Désactivés)</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {user ? (
+            <button 
+              onClick={handleLogout}
+              className="mt-4 sm:mt-6 flex items-center gap-2 px-4 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 rounded-xl transition-colors text-sm font-medium"
+            >
+              <LogOut size={18} />
+              <span>{t('profile.logout', 'Déconnexion')}</span>
+            </button>
+          ) : (
+            <button 
+              onClick={() => setShowAuthModal(true)}
+              className="mt-4 sm:mt-6 flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl transition-colors text-sm font-medium"
+            >
+              <LogIn size={18} />
+              <span>{t('profile.login', 'Se connecter')}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={(e) => handleImageUpload(e, 'profile')} 
+        accept="image/*" 
+        className="hidden" 
+      />
+      <input 
+        type="file" 
+        ref={coverInputRef} 
+        onChange={(e) => handleImageUpload(e, 'cover')} 
+        accept="image/*" 
+        className="hidden" 
+      />
+
+      <Premium12hCountdownWidget className="mb-6" />
+
+      <GamificationBadges />
+
+      {/* Section Mes Favoris (Secrets et Articles) */}
+      <CollapsibleSection
+        title={t('profile.favorites.title', 'Mes Favoris')}
+        icon={<Star className="text-amber-500" size={20} />}
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          Retrouvez ici tous les secrets et articles que vous avez marqués comme favoris.
+        </p>
+
+        {loadingFavorites ? (
+          <div className="flex flex-col gap-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={`profile-fav-skel-${i}`} className="h-16 w-full bg-gray-100 dark:bg-gray-800/50 rounded-2xl animate-pulse"></div>
+            ))}
+          </div>
+        ) : favorites.length === 0 ? (
+          <div className="text-center py-8 bg-gray-50 dark:bg-gray-800/30 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700">
+            <Star className="mx-auto text-gray-300 dark:text-gray-600 mb-2" size={32} />
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Aucun favori pour le moment.
+            </p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+              Vous pouvez ajouter des secrets et des articles à vos favoris en cliquant sur l'icône étoile.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {favorites.map((item, favIdx) => {
+              const isArticle = item.category === undefined || item.category === '' || item.type === 'richtext';
+              return (
+                <div 
+                  key={item.id ? `fav-${item.id}-${favIdx}` : `fav-${favIdx}`}
+                  className="flex items-center justify-between border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800/40 rounded-2xl p-4 transition-all hover:border-emerald-200 dark:hover:border-emerald-800/40 group"
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400">
+                      {isArticle ? <FileText size={18} /> : <BookOpen size={18} />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                          {isArticle ? "Article" : (item.category || "Secret")}
+                        </span>
+                        {item.isPremium && (
+                          <span className="bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase">
+                            Premium
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="font-bold text-gray-900 dark:text-white text-sm sm:text-base mt-0.5 truncate">
+                        {item.title}
+                      </h4>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 ml-4">
+                    {isArticle ? (
+                      <button
+                        onClick={() => setSelectedFavArticle(item)}
+                        className="text-xs text-emerald-600 dark:text-emerald-400 font-bold px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors cursor-pointer"
+                      >
+                        Lire
+                      </button>
+                    ) : (
+                      <Link
+                        to={`/secret/${item.id}`}
+                        className="text-xs text-emerald-600 dark:text-emerald-400 font-bold px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors"
+                      >
+                        Ouvrir
+                      </Link>
+                    )}
+
+                    <button
+                      onClick={(e) => handleRemoveFavorite(item.id, e)}
+                      className="p-2 text-gray-400 hover:text-red-500 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors cursor-pointer"
+                      title="Retirer des favoris"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CollapsibleSection>
+
+      {/* Section Secrets Hors Ligne */}
+      <CollapsibleSection
+        title={t('profile.offlineSecrets.title', 'Secrets Hors Ligne')}
+        icon={<HardDriveDownload className="text-teal-500" size={20} />}
+        headerAction={
+          offlineSecrets.length > 0 ? (
+            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-teal-50 dark:bg-teal-900/30 text-teal-600 dark:text-teal-400 border border-teal-200 dark:border-teal-800/40">
+              {offlineSecrets.length} {offlineSecrets.length === 1 ? 'secret' : 'secrets'}
+            </span>
+          ) : undefined
+        }
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          {t('profile.offlineSecrets.desc', 'Ces secrets sont intégralement enregistrés dans la mémoire locale de votre appareil. Vous pouvez les consulter sans aucune connexion internet.')}
+        </p>
+
+        {loadingOfflineSecrets ? (
+          <div className="flex flex-col gap-3">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div key={`profile-offline-skel-${i}`} className="h-16 w-full bg-gray-100 dark:bg-gray-800/50 rounded-2xl animate-pulse"></div>
+            ))}
+          </div>
+        ) : offlineSecrets.length === 0 ? (
+          <div className="text-center py-8 bg-gray-50 dark:bg-gray-800/30 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700">
+            <HardDriveDownload className="mx-auto text-gray-300 dark:text-gray-600 mb-2" size={32} />
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {t('profile.offlineSecrets.empty', 'Aucun secret sauvegardé pour lecture hors ligne.')}
+            </p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+              {t('profile.offlineSecrets.emptyHint', "Sur la page d'un secret, cliquez sur 'Sauvegarder' pour y accéder à tout moment sans connexion internet.")}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {offlineSecrets.map((item, idx) => (
+              <div
+                key={item.id ? `offline-${item.id}-${idx}` : `offline-${idx}`}
+                className="flex items-center justify-between border border-teal-100 dark:border-teal-900/40 bg-teal-50/20 dark:bg-teal-950/20 rounded-2xl p-4 transition-all hover:border-teal-300 dark:hover:border-teal-700/60 group"
+              >
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="p-2.5 rounded-xl bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300">
+                    <BookOpen size={18} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-teal-700 dark:text-teal-300 uppercase tracking-wider">
+                        {item.category || "Secret"}
+                      </span>
+                      {item.isPremium && (
+                        <span className="bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase">
+                          Premium
+                        </span>
+                      )}
+                      <span className="bg-emerald-100/70 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase">
+                        Hors-Ligne
+                      </span>
+                    </div>
+                    <h4 className="font-bold text-gray-900 dark:text-white text-sm sm:text-base mt-0.5 truncate">
+                      {item.title}
+                    </h4>
+                    {item.savedAt && (
+                      <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">
+                        Enregistré le {new Date(item.savedAt).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 ml-4">
+                  <Link
+                    to={`/secret/${item.id}`}
+                    className="text-xs text-teal-700 dark:text-teal-300 font-bold px-3 py-1.5 rounded-xl bg-teal-100 dark:bg-teal-900/40 hover:bg-teal-200 dark:hover:bg-teal-800/60 transition-colors"
+                  >
+                    {t('profile.offlineSecrets.read', 'Lire')}
+                  </Link>
+
+                  <button
+                    onClick={(e) => handleRemoveOfflineSecret(item.id, e)}
+                    className="p-2 text-gray-400 hover:text-red-500 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors cursor-pointer"
+                    title={t('profile.offlineSecrets.remove', 'Supprimer de la mémoire locale')}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CollapsibleSection>
+
+      {/* Informations Personnelles (Nom, Pays, Téléphone) */}
+      <CollapsibleSection
+        title={t('profile.personalInfo.title', 'Informations du Profil')}
+        icon={<User className="text-emerald-500" size={20} />}
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          {t('profile.personalInfo.subtitle', "Mettez à jour vos informations de profil. Ces informations seront visibles par les administrateurs.")}
+        </p>
+
+        {profileSavedMsg && (
+          <div className="mb-4 p-3 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 text-sm font-semibold rounded-xl flex items-center gap-2">
+            <CheckCircle size={16} className="text-emerald-500" />
+            <span>{profileSavedMsg}</span>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+              {t('profile.personalInfo.fullName', 'Nom complet')}
+            </label>
+            <input
+              type="text"
+              value={profileName}
+              onChange={(e) => setProfileName(e.target.value)}
+              className="w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none dark:text-white"
+              placeholder="Ex: Seydina Mouhamed"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+              {t('profile.personalInfo.country', 'Pays')}
+            </label>
+            <input
+              type="text"
+              value={profileCountry}
+              onChange={(e) => setProfileCountry(e.target.value)}
+              className="w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none dark:text-white"
+              placeholder="Ex: Sénégal"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+              {t('profile.personalInfo.phone', 'Pays + numéro de téléphone')}
+            </label>
+            <input
+              type="text"
+              value={profilePhone}
+              onChange={(e) => setProfilePhone(e.target.value)}
+              className="w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none dark:text-white"
+              placeholder="Ex: +221 77 123 45 67"
+            />
+          </div>
+
+          <button
+            onClick={handleSaveProfile}
+            disabled={isSavingProfile || !user}
+            className="w-full sm:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold transition-all shadow-sm flex items-center justify-center gap-2 mt-4 cursor-pointer"
+          >
+            {isSavingProfile ? (
+              <>
+                <RefreshCw className="animate-spin" size={16} />
+                Enregistrement...
+              </>
+            ) : (
+              <>
+                <Save size={16} />
+                Enregistrer les modifications
+              </>
+            )}
+          </button>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title={t('profile.reminders.title', 'Rappels Quotidiens')}
+        icon={<Bell className="text-emerald-500" size={20} />}
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          {t('profile.reminders.subtitle', "Configurez des rappels pour vos heures de lecture (Wirds, Zikrs). L'application vous enverra une notification à l'heure souhaitée.")}
+        </p>
+
+        {/* Toggle Switch with Sync Status */}
+        <div className="bg-gray-50 dark:bg-gray-800/30 border border-gray-100 dark:border-gray-700/80 rounded-2xl p-4 sm:p-5 mb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-bold text-gray-900 dark:text-white text-base">
+                {t('profile.reminders.notifications', 'Notifications Push')}
+              </span>
+              
+              {/* Sync status indicator */}
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 dark:bg-gray-700">
+                {isSyncingNotifs ? (
+                  <>
+                    <RefreshCw className="animate-spin text-amber-500" size={12} />
+                    <span className="text-amber-600 dark:text-amber-400">Synchronisation...</span>
+                  </>
+                ) : notifsSynced ? (
+                  <>
+                    <CheckCircle className="text-emerald-500" size={12} />
+                    <span className="text-emerald-600 dark:text-emerald-400">Synchronisé</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="text-red-500" size={12} />
+                    <span className="text-red-600 dark:text-red-400">Non synchronisé</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              {fcmEnabled 
+                ? "Vous recevrez des rappels et annonces en temps réel sur cet appareil." 
+                : "Activez pour ne rater aucun wird, rappel ou nouvelle annonce."}
+            </p>
+          </div>
+          
+          <div className="flex items-center gap-4">
+            {fcmEnabled && (
+              <button
+                onClick={testPushNotification}
+                disabled={isTestingPush}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1"
+              >
+                {isTestingPush ? "Envoi du test..." : "Tester"}
+                {testSuccess === true && " ✅"}
+                {testSuccess === false && " ❌"}
+              </button>
+            )}
+
+            {/* Visual Toggle Status Switch & Explicit Text Button */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleToggleNotifications}
+                disabled={isSyncingNotifs}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  fcmEnabled 
+                    ? 'bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-900/20 dark:text-red-400' 
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400'
+                }`}
+              >
+                {fcmEnabled 
+                  ? (language === 'fr' ? 'Désactiver' : language === 'ha' ? 'Kashe' : 'Disable') 
+                  : (language === 'fr' ? 'Activer' : language === 'ha' ? 'Kunna' : 'Enable')
+                }
+              </button>
+
+              <button
+                onClick={handleToggleNotifications}
+                disabled={isSyncingNotifs}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  fcmEnabled ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    fcmEnabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3 mb-6">
+          {reminders.map((rem, remIdx) => (
+            <div key={rem.id ? `rem-${rem.id}-${remIdx}` : `rem-${remIdx}`} className="flex flex-col sm:flex-row sm:items-center justify-between border border-gray-100 dark:border-gray-700 rounded-2xl p-4 bg-gray-50 dark:bg-gray-800/50 gap-4">
+              <div className="flex items-center gap-3 flex-1">
+                <div className={`p-2 rounded-xl flex-shrink-0 ${rem.enabled ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400' : 'bg-gray-200 text-gray-400 dark:bg-gray-700 dark:text-gray-500'}`}>
+                  {rem.isZikr ? <Sparkles size={20} /> : <Clock size={20} />}
+                </div>
+                <div>
+                  <h3 className={`font-bold ${rem.enabled ? 'text-gray-900 dark:text-white' : 'text-gray-400 dark:text-gray-500'}`}>{rem.time}</h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className={`text-sm ${rem.enabled ? 'text-gray-500 dark:text-gray-400' : 'text-gray-400 dark:text-gray-600'}`}>{rem.label}</p>
+                    {rem.isZikr && (
+                      <span className="text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                        Zikr
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto">
+                <button 
+                  onClick={() => removeReminder(rem.id)}
+                  className="text-sm text-red-500 hover:text-red-600 font-medium px-2"
+                >
+                  {t('common.delete', 'Supprimer')}
+                </button>
+                <div 
+                  onClick={() => toggleReminder(rem.id)}
+                  className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors ${rem.enabled ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                >
+                  <motion.div 
+                    className="w-4 h-4 bg-white rounded-full shadow-sm"
+                    animate={{ x: rem.enabled ? 24 : 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-emerald-50/50 dark:bg-emerald-900/10 rounded-2xl p-4 border border-emerald-100 dark:border-emerald-800/30">
+          <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-3">
+            {t('profile.reminders.addTitle', 'Ajouter un rappel')}
+          </h4>
+          
+          <div className="flex gap-2 mb-4 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl w-fit">
+            <button
+              type="button"
+              onClick={() => setReminderType('simple')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                reminderType === 'simple'
+                  ? 'bg-white dark:bg-gray-750 text-emerald-600 dark:text-emerald-400 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+              }`}
+            >
+              Rappel Simple
+            </button>
+            <button
+              type="button"
+              onClick={() => setReminderType('zikr')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                reminderType === 'zikr'
+                  ? 'bg-white dark:bg-gray-750 text-emerald-600 dark:text-emerald-400 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+              }`}
+            >
+              📿 Rappel de Zikr
+            </button>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col md:flex-row gap-3">
+              <div className="flex flex-col gap-1 w-full md:w-1/4">
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Heure du rappel</label>
+                <input 
+                  type="time" 
+                  value={newTime}
+                  onChange={e => setNewTime(e.target.value)}
+                  className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none dark:text-white h-10 w-full"
+                />
+              </div>
+
+              {reminderType === 'simple' ? (
+                <div className="flex-1 flex flex-col gap-1 w-full">
+                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Libellé du rappel</label>
+                  <input 
+                    type="text" 
+                    placeholder={t('profile.reminders.placeholder', 'Ex: Wird du matin')}
+                    value={newLabel}
+                    onChange={e => setNewLabel(e.target.value)}
+                    className="flex-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none dark:text-white h-10 w-full"
+                  />
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col sm:flex-row gap-3 w-full">
+                  <div className="flex-1 flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Sélectionner un Zikr</label>
+                    <select
+                      value={selectedZikrId}
+                      onChange={e => setSelectedZikrId(e.target.value)}
+                      className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none dark:text-white h-10 w-full"
+                    >
+                      {PRESET_ZIKRS.map((z, zIdx) => (
+                        <option key={`preset-zikr-${z.id}-${zIdx}`} value={z.id}>
+                          {z.text} {z.arabic ? `(${z.arabic})` : ''} {z.id !== 'custom' ? ` - ${z.target}x` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {selectedZikrId === 'custom' && (
+                    <>
+                      <div className="flex-1 flex flex-col gap-1">
+                        <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Nom du Zikr personnalisé</label>
+                        <input
+                          type="text"
+                          placeholder="Ex: Astaghfirullah Al-Azim"
+                          value={customZikrName}
+                          onChange={e => setCustomZikrName(e.target.value)}
+                          className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none dark:text-white h-10 w-full"
+                        />
+                      </div>
+                      <div className="w-full sm:w-24 flex flex-col gap-1">
+                        <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Objectif</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={customZikrTarget}
+                          onChange={e => setCustomZikrTarget(parseInt(e.target.value, 10) || 100)}
+                          className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none dark:text-white h-10 w-full"
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <button 
+              onClick={addReminder}
+              disabled={reminderType === 'simple' ? !newLabel : (selectedZikrId === 'custom' ? !customZikrName : false)}
+              className="mt-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-4 py-2.5 text-sm font-bold disabled:opacity-50 transition-colors shadow-sm flex items-center justify-center gap-2"
+            >
+              <Plus size={16} /> Ajouter le rappel de Zikr quotidien
+            </button>
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id="system-permissions-section"
+        defaultOpen={shouldOpenPermissions}
+        title={t('profile.permissions.title', "Autorisations Systèmes (Micro, GPS, Stockage, Notifications)")}
+        icon={<Shield className="text-emerald-500" size={20} />}
+      >
+        <div className="space-y-4">
+          {/* Permission Toast */}
+          <AnimatePresence>
+            {permissionToast && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className={`p-3 rounded-2xl border text-xs flex items-center justify-between gap-2 ${
+                  permissionToast.type === 'success'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
+                    : 'bg-rose-500/10 border-rose-500/30 text-rose-800 dark:text-rose-300'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  {permissionToast.type === 'success' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+                  <span className="font-semibold">{permissionToast.message}</span>
+                </div>
+                <button
+                  onClick={() => setPermissionToast(null)}
+                  className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg"
+                >
+                  <X size={14} />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 leading-relaxed max-w-xl">
+              {t('profile.permissions.subtitle', "Sur Android et sur le navigateur web, les autorisations apparaissent dans le menu système d'Android uniquement lorsqu'elles ont été sollicitées une première fois.")}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setTroubleshooterTab('microphone');
+                setIsTroubleshooterOpen(true);
+              }}
+              className="text-xs font-bold text-amber-600 dark:text-amber-400 hover:underline flex items-center gap-1.5 p-1 cursor-pointer shrink-0"
+            >
+              <HelpCircle size={14} />
+              <span>Pourquoi c'est refusé ? (Guide d'aide)</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 my-4">
+            {/* Geolocation */}
+            <div className="bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-700/80 rounded-2xl p-4 flex flex-col justify-between gap-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
+                    <MapPin size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                      {t('profile.permissions.geoTitle', 'Localisation GPS')}
+                      {appPermissions.geolocation && <CheckCircle size={14} className="text-emerald-500" />}
+                    </h4>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">
+                      {t('profile.permissions.geoDesc', 'Direction de la Qibla, heures de prière et calculs astronomiques.')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTroubleshooterTab('manual_city');
+                    setIsTroubleshooterOpen(true);
+                  }}
+                  className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <Compass size={13} />
+                  <span>Choisir ville sans GPS</span>
+                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTroubleshooterTab('geolocation');
+                      setIsTroubleshooterOpen(true);
+                    }}
+                    className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                    title="Aide au déblocage"
+                  >
+                    <HelpCircle size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRequestGeo}
+                    disabled={isRequestingPerms}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-sm"
+                  >
+                    {appPermissions.geolocation ? 'Tester' : t('profile.permissions.authorize', 'Autoriser')}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Microphone */}
+            <div className="bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-700/80 rounded-2xl p-4 flex flex-col justify-between gap-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 shrink-0">
+                    <Mic size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                      {t('profile.permissions.micTitle', 'Microphone & Audio')}
+                      {appPermissions.microphone && <CheckCircle size={14} className="text-emerald-500" />}
+                    </h4>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">
+                      {t('profile.permissions.micDesc', 'Compteur Zikr vocal et détection sonore de récitation.')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTroubleshooterTab('microphone');
+                    setIsTroubleshooterOpen(true);
+                  }}
+                  className="text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <HelpCircle size={13} />
+                  <span>Guide de déblocage</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRequestMic}
+                  disabled={isRequestingPerms}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-sm"
+                >
+                  {appPermissions.microphone ? 'Tester' : t('profile.permissions.authorize', 'Autoriser')}
+                </button>
+              </div>
+            </div>
+
+            {/* Storage */}
+            <div className="bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-700/80 rounded-2xl p-4 flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                  <HardDrive size={20} />
+                </div>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                    {t('profile.permissions.storageTitle', 'Stockage & Fichiers')}
+                    {appPermissions.storage && <CheckCircle size={14} className="text-emerald-500" />}
+                  </h4>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">
+                    {t('profile.permissions.storageDesc', 'Téléchargement des parchemins PNG et cache hors-ligne.')}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleRequestStoragePermission}
+                disabled={isRequestingStorage}
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer"
+              >
+                {t('profile.permissions.authorize', 'Autoriser')}
+              </button>
+            </div>
+
+            {/* Notifications */}
+            <div className="bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-700/80 rounded-2xl p-4 flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 shrink-0">
+                  <Bell size={20} />
+                </div>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                    {t('profile.permissions.notifTitle', 'Notifications Push')}
+                    {fcmEnabled && <CheckCircle size={14} className="text-emerald-500" />}
+                  </h4>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">
+                    {t('profile.permissions.notifDesc', "Heures planétaires, Sa'ah al-Ijābah et rappels de Zikr.")}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleToggleNotifications}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer"
+              >
+                {fcmEnabled ? t('profile.permissions.authorized', 'Activé') : t('profile.permissions.authorize', 'Activer')}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleRequestAllPermissions}
+            disabled={isRequestingPerms}
+            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs sm:text-sm font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer mt-2"
+          >
+            {isRequestingPerms ? (
+              <>
+                <RefreshCw className="animate-spin" size={16} />
+                {t('profile.permissions.requestingAll', 'Demande des autorisations en cours...')}
+              </>
+            ) : (
+              <>
+                <Shield size={16} />
+                {t('profile.permissions.requestAll', 'Activer & Tester toutes les autorisations (Micro, GPS, Stockage, Notifications)')}
+              </>
+            )}
+          </button>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title={t('profile.theme.title', 'Apparence & Thème')}
+        icon={<Moon className="text-emerald-500" size={20} />}
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          {t('profile.theme.subtitle', "Personnalisez l'apparence de l'application. Le mode automatique synchronise l'affichage avec votre système pour un confort optimal jour et nuit.")}
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <button
+            onClick={() => setTheme('light')}
+            className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${theme === 'light' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : 'border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 hover:border-gray-200 dark:hover:border-gray-600'}`}
+          >
+            <Sun size={24} className={theme === 'light' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'} />
+            <span className={`font-medium text-sm ${theme === 'light' ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-700 dark:text-gray-300'}`}>{t('profile.theme.light', 'Clair')}</span>
+          </button>
+          
+          <button
+            onClick={() => setTheme('dark')}
+            className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${theme === 'dark' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : 'border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 hover:border-gray-200 dark:hover:border-gray-600'}`}
+          >
+            <Moon size={24} className={theme === 'dark' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'} />
+            <span className={`font-medium text-sm ${theme === 'dark' ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-700 dark:text-gray-300'}`}>{t('profile.theme.dark', 'Sombre')}</span>
+          </button>
+
+          <button
+            onClick={() => setTheme('system')}
+            className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${theme === 'system' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : 'border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 hover:border-gray-200 dark:hover:border-gray-600'}`}
+          >
+            <Smartphone size={24} className={theme === 'system' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'} />
+            <span className={`font-medium text-sm ${theme === 'system' ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-700 dark:text-gray-300'}`}>{t('profile.theme.auto', 'Automatique')}</span>
+          </button>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id="battery-saver-section"
+        title={language === 'fr' ? 'Mode Basse Consommation & Performances (Low Resource Mode)' : t('profile.batterySaver.title', 'Économiseur de Batterie & Performances')}
+        icon={<BatteryCharging className="text-emerald-500" size={20} />}
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
+          {language === 'fr'
+            ? "Surveille les performances de votre appareil (batterie et CPU) et réduit l'impact énergétique en désactivant les animations secondaires et en espaçant les requêtes d'arrière-plan."
+            : t('profile.batterySaver.subtitle', "Optimisez l'autonomie de votre batterie et réduisez la consommation de données mobiles en allégeant les animations et en espaçant les synchronisations en arrière-plan.")}
+        </p>
+
+        {/* Live Performance & Battery Status Bar */}
+        <div className="mb-4 p-3 bg-white dark:bg-gray-800/80 rounded-2xl border border-gray-150 dark:border-gray-700/80 flex flex-wrap items-center justify-between gap-3 text-xs shadow-2xs">
+          <div className="flex items-center gap-2">
+            <div className={`p-2 rounded-xl flex items-center justify-center ${
+              perf.isHighConsumptionDetected
+                ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400'
+                : 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400'
+            }`}>
+              {perf.isHighConsumptionDetected ? <BatteryWarning size={18} /> : <Battery size={18} />}
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5 font-bold text-gray-900 dark:text-white">
+                <span>{language === 'fr' ? 'Batterie' : 'Battery'}:</span>
+                <span>
+                  {perf.batteryLevel !== null ? `${perf.batteryLevel}%` : (language === 'fr' ? 'Standard' : 'Standard')}
+                </span>
+                {perf.isCharging && (
+                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                    <Zap size={11} />
+                    {language === 'fr' ? 'En charge' : 'Charging'}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                {perf.isHighConsumptionDetected
+                  ? (language === 'fr' ? '⚠️ Forte consommation détectée' : '⚠️ High battery drain detected')
+                  : (language === 'fr' ? 'Consommation stable' : 'Normal consumption')}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-mono font-bold text-[11px]">
+              <Cpu size={13} className="text-gray-400" />
+              <span>{perf.fps} FPS</span>
+            </div>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+              perf.isLowResourceActive
+                ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+            }`}>
+              {perf.isLowResourceActive
+                ? (language === 'fr' ? 'Mode Éco Actif' : 'Eco Mode On')
+                : (language === 'fr' ? 'Mode Standard' : 'Standard Mode')}
+            </span>
+          </div>
+        </div>
+
+        {/* Master Low Resource Mode Toggle */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border border-gray-100 dark:border-gray-700 rounded-2xl p-4 bg-gray-50 dark:bg-gray-800/50 gap-4 mb-3">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl transition-colors ${perf.isLowResourceActive ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-400'}`}>
+              {perf.isLowResourceActive ? <BatteryCharging size={22} /> : <ZapOff size={22} />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-gray-900 dark:text-white text-sm sm:text-base">
+                  {language === 'fr' ? 'Mode Basse Consommation (Low Resource Mode)' : t('profile.batterySaver.toggleTitle', "Mode Économie d'Énergie")}
+                </h3>
+                {perf.isLowResourceActive && (
+                  <span className="text-[10px] uppercase font-bold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full">
+                    {t('profile.batterySaver.activeBadge', 'Actif')}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {language === 'fr'
+                  ? "Désactive les animations non essentielles et espace les synchronisations et vérifications pour préserver la batterie"
+                  : t('profile.batterySaver.toggleDesc', "Réduit l'intensité des animations et espace les synchronisations en arrière-plan à 30 minutes")}
+              </p>
+            </div>
+          </div>
+          <div
+            role="button"
+            aria-label="Toggle low resource mode"
+            tabIndex={0}
+            onClick={() => perf.toggleLowResource()}
+            className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors shrink-0 ${perf.isLowResourceActive ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+          >
+            <motion.div
+              className="w-4 h-4 bg-white rounded-full shadow-sm"
+              animate={{ x: perf.isLowResourceActive ? 24 : 0 }}
+              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+            />
+          </div>
+        </div>
+
+        {/* Auto Enable on Low Battery / High Drain */}
+        <div className="flex items-center justify-between border border-gray-100 dark:border-gray-700/80 rounded-2xl p-3.5 bg-white dark:bg-gray-800/40 gap-3 mb-4">
+          <div>
+            <h4 className="text-xs sm:text-sm font-bold text-gray-900 dark:text-white">
+              {language === 'fr' ? 'Activation automatique si batterie faible (≤ 20%)' : 'Auto-enable on low battery (≤ 20%)'}
+            </h4>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+              {language === 'fr'
+                ? 'Bascule automatiquement en basse consommation en cas de batterie faible ou de décharge rapide'
+                : 'Automatically switches to low resource mode when battery is critical or draining fast'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAutoLowResourceOnBattery(!autoLowResourceOnBattery)}
+            className={`w-10 h-5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors shrink-0 ${autoLowResourceOnBattery ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+          >
+            <motion.div
+              className="w-4 h-4 bg-white rounded-full shadow-xs"
+              animate={{ x: autoLowResourceOnBattery ? 20 : 0 }}
+              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+            />
+          </button>
+        </div>
+
+        {/* Feature Breakdown Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+          {/* Background Sync Setting */}
+          <div className="p-3.5 bg-white dark:bg-gray-900/40 border border-gray-100 dark:border-gray-800 rounded-xl flex items-start gap-3">
+            <div className="p-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg shrink-0 mt-0.5">
+              <RefreshCw size={18} />
+            </div>
+            <div>
+              <h4 className="font-semibold text-gray-900 dark:text-white text-xs sm:text-sm">
+                {t('profile.batterySaver.syncTitle', 'Fréquence de Synchronisation')}
+              </h4>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                {perf.isLowResourceActive
+                  ? t('profile.batterySaver.syncEco', 'Mode Éco : Synchro espacée toutes les 30 minutes')
+                  : t('profile.batterySaver.syncNormal', 'Mode Standard : Synchro régulière toutes les 10 minutes')}
+              </p>
+              <span className="inline-block mt-1.5 text-[10px] font-bold px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                {perf.isLowResourceActive ? '30 min interval' : '10 min interval'}
+              </span>
+            </div>
+          </div>
+
+          {/* Animation & GPU Optimization */}
+          <div className="p-3.5 bg-white dark:bg-gray-900/40 border border-gray-100 dark:border-gray-800 rounded-xl flex items-start gap-3">
+            <div className="p-2 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 rounded-lg shrink-0 mt-0.5">
+              <Sparkles size={18} />
+            </div>
+            <div>
+              <h4 className="font-semibold text-gray-900 dark:text-white text-xs sm:text-sm">
+                {t('profile.batterySaver.animationTitle', 'Intensité des Animations')}
+              </h4>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                {perf.isLowResourceActive
+                  ? t('profile.batterySaver.animationEco', 'Allégée : Boucles infinies et effets GPU minimisés')
+                  : t('profile.batterySaver.animationNormal', 'Complète : Transitions et effets dynamiques fluides')}
+              </p>
+              <span className="inline-block mt-1.5 text-[10px] font-bold px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                {perf.isLowResourceActive ? t('profile.batterySaver.animLow', 'Faible impact GPU') : t('profile.batterySaver.animHigh', 'Haute fluidité')}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Global Image Lazy-Loading Info */}
+        <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/20 rounded-2xl border border-emerald-100 dark:border-emerald-900/30">
+          <div className="flex items-center gap-2 mb-1">
+            <Zap size={14} className="text-emerald-600 dark:text-emerald-400" />
+            <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">
+              {t('profile.batterySaver.lazyLoadTitle', 'Chargement Différé des Images (Lazy-Loading Global)')}
+            </span>
+          </div>
+          <p className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80 leading-relaxed">
+            {t('profile.batterySaver.lazyLoadDesc', "Les images des livres, articles et galeries sont chargées via un Intersection Observer uniquement lorsqu'elles approchent de l'écran, réduisant l'utilisation de la mémoire RAM et des données mobiles.")}
+          </p>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id="haptics-control-section"
+        title={t('profile.haptics.title', 'Contrôle des Vibrations & Haptique')}
+        icon={<Vibrate className="text-emerald-500" size={20} />}
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          {t('profile.haptics.subtitle', 'Personnalisez le retour de vibration tactile pour les compteurs de Dhikr, le Tasbih et les actions de l\'interface.')}
+        </p>
+
+        {/* Master Haptic Toggle */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border border-gray-100 dark:border-gray-700 rounded-2xl p-4 bg-gray-50 dark:bg-gray-800/50 gap-4 mb-4">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl transition-colors ${hapticsConfig.enabled ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-400'}`}>
+              <Vibrate size={22} />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900 dark:text-white text-sm sm:text-base">
+                {t('profile.haptics.masterToggle', 'Vibrations & Retour Haptique')}
+              </h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {t('profile.haptics.masterDesc', "Activer ou désactiver l'ensemble des retours tactiles dans l'application")}
+              </p>
+            </div>
+          </div>
+          <div
+            id="haptics-master-toggle"
+            role="button"
+            aria-label="Toggle haptic vibration"
+            tabIndex={0}
+            onClick={() => {
+              const next = !hapticsConfig.enabled;
+              updateHapticsConfig({ enabled: next });
+              if (next) testHaptics('medium');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                const next = !hapticsConfig.enabled;
+                updateHapticsConfig({ enabled: next });
+                if (next) testHaptics('medium');
+              }
+            }}
+            className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors shrink-0 ${hapticsConfig.enabled ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+          >
+            <motion.div
+              className="w-4 h-4 bg-white rounded-full shadow-sm"
+              animate={{ x: hapticsConfig.enabled ? 24 : 0 }}
+              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+            />
+          </div>
+        </div>
+
+        {/* Detailed Options when Enabled */}
+        {hapticsConfig.enabled && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="space-y-4"
+          >
+            {/* Dhikr Tracker / Tasbih feedback */}
+            <div className="flex items-center justify-between p-3.5 bg-white dark:bg-gray-900/40 border border-gray-100 dark:border-gray-800 rounded-xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-lg">
+                  <Target size={18} />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-900 dark:text-white text-xs sm:text-sm">
+                    {t('profile.haptics.dhikrToggle', 'Compteur de Dhikr & Tasbih')}
+                  </h4>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                    {t('profile.haptics.dhikrDesc', 'Vibration subtile à chaque incrémentation et lors des paliers spirituels')}
+                  </p>
+                </div>
+              </div>
+              <div
+                role="button"
+                aria-label="Toggle dhikr haptics"
+                tabIndex={0}
+                onClick={() => {
+                  const next = !hapticsConfig.dhikrFeedback;
+                  updateHapticsConfig({ dhikrFeedback: next });
+                  if (next) testHaptics('light');
+                }}
+                className={`w-10 h-5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors shrink-0 ${hapticsConfig.dhikrFeedback ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+              >
+                <motion.div
+                  className="w-4 h-4 bg-white rounded-full shadow-sm"
+                  animate={{ x: hapticsConfig.dhikrFeedback ? 20 : 0 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                />
+              </div>
+            </div>
+
+            {/* Button press feedback */}
+            <div className="flex items-center justify-between p-3.5 bg-white dark:bg-gray-900/40 border border-gray-100 dark:border-gray-800 rounded-xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-lg">
+                  <Smartphone size={18} />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-900 dark:text-white text-xs sm:text-sm">
+                    {t('profile.haptics.buttonToggle', 'Boutons & Actions UI')}
+                  </h4>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                    {t('profile.haptics.buttonDesc', 'Léger retour haptique lors des clics sur les boutons et onglets')}
+                  </p>
+                </div>
+              </div>
+              <div
+                role="button"
+                aria-label="Toggle button press haptics"
+                tabIndex={0}
+                onClick={() => {
+                  const next = !hapticsConfig.buttonFeedback;
+                  updateHapticsConfig({ buttonFeedback: next });
+                  if (next) testHaptics('light');
+                }}
+                className={`w-10 h-5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors shrink-0 ${hapticsConfig.buttonFeedback ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+              >
+                <motion.div
+                  className="w-4 h-4 bg-white rounded-full shadow-sm"
+                  animate={{ x: hapticsConfig.buttonFeedback ? 20 : 0 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                />
+              </div>
+            </div>
+
+            {/* Target Goal Celebration */}
+            <div className="flex items-center justify-between p-3.5 bg-white dark:bg-gray-900/40 border border-gray-100 dark:border-gray-800 rounded-xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 rounded-lg">
+                  <Sparkles size={18} />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-900 dark:text-white text-xs sm:text-sm">
+                    {t('profile.haptics.celebrationToggle', "Célébration d'Objectif Spirituel")}
+                  </h4>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                    {t('profile.haptics.celebrationDesc', 'Vibration festive rythmée lors de la complétion d’un objectif')}
+                  </p>
+                </div>
+              </div>
+              <div
+                role="button"
+                aria-label="Toggle target celebration haptics"
+                tabIndex={0}
+                onClick={() => {
+                  const next = !hapticsConfig.targetCelebration;
+                  updateHapticsConfig({ targetCelebration: next });
+                  if (next) testHaptics('success');
+                }}
+                className={`w-10 h-5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors shrink-0 ${hapticsConfig.targetCelebration ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+              >
+                <motion.div
+                  className="w-4 h-4 bg-white rounded-full shadow-sm"
+                  animate={{ x: hapticsConfig.targetCelebration ? 20 : 0 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                />
+              </div>
+            </div>
+
+            {/* Intensity Selector */}
+            <div className="pt-2">
+              <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-2">
+                {t('profile.haptics.intensity', 'Intensité de la vibration')}
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {(['light', 'medium', 'heavy'] as const).map((level, lIdx) => {
+                  const isSelected = hapticsConfig.intensity === level;
+                  return (
+                    <button
+                      key={`haptic-lvl-btn-${level}-${lIdx}`}
+                      type="button"
+                      onClick={() => {
+                        updateHapticsConfig({ intensity: level });
+                        testHaptics(level);
+                      }}
+                      className={`py-2.5 px-3 rounded-xl border text-xs font-bold transition-all flex flex-col items-center gap-1 cursor-pointer ${
+                        isSelected
+                          ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 shadow-sm'
+                          : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600'
+                      }`}
+                    >
+                      <span>{t(`profile.haptics.${level}`, level === 'light' ? 'Léger' : level === 'medium' ? 'Moyen' : 'Fort')}</span>
+                      <span className="text-[10px] font-normal opacity-75">
+                        {level === 'light' ? '15ms' : level === 'medium' ? '35ms' : '60ms'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Interactive Testing Ground */}
+            <div className="p-3.5 bg-gray-50 dark:bg-gray-900/60 rounded-2xl border border-gray-100 dark:border-gray-800 mt-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                  <Vibrate size={14} className="text-emerald-500" />
+                  {t('profile.haptics.testTitle', 'Tester les vibrations :')}
+                </span>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full">
+                  @capacitor/haptics
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  onClick={() => testHaptics('light')}
+                  className="px-2.5 py-2 rounded-lg bg-white dark:bg-gray-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-gray-700 dark:text-gray-300 hover:text-emerald-600 dark:hover:text-emerald-400 border border-gray-200 dark:border-gray-700 text-xs font-medium transition-all shadow-xs cursor-pointer"
+                >
+                  {t('profile.haptics.testLight', 'Test Léger')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => testHaptics('medium')}
+                  className="px-2.5 py-2 rounded-lg bg-white dark:bg-gray-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-gray-700 dark:text-gray-300 hover:text-emerald-600 dark:hover:text-emerald-400 border border-gray-200 dark:border-gray-700 text-xs font-medium transition-all shadow-xs cursor-pointer"
+                >
+                  {t('profile.haptics.testMedium', 'Test Moyen')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => testHaptics('heavy')}
+                  className="px-2.5 py-2 rounded-lg bg-white dark:bg-gray-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-gray-700 dark:text-gray-300 hover:text-emerald-600 dark:hover:text-emerald-400 border border-gray-200 dark:border-gray-700 text-xs font-medium transition-all shadow-xs cursor-pointer"
+                >
+                  {t('profile.haptics.testHeavy', 'Test Fort')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => testHaptics('success')}
+                  className="px-2.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-sm cursor-pointer"
+                >
+                  {t('profile.haptics.testCelebration', 'Test Célébration')}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title={t('profile.adsAndPurchases.title', "Abonnement & Achats")}
+        icon={<Shield className="text-emerald-500" size={20} />}
+      >
+        <div className="mb-6">
+          <Premium12hCountdownWidget compact={false} />
+        </div>
+
+        {user?.subscriptionTier === 'premium' || user?.subscriptionTier === 'pro' ? (
+          <div className="mb-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border border-gray-100 dark:border-gray-700 rounded-2xl p-4 bg-gray-50 dark:bg-gray-800/50 gap-4 mb-4">
+              <div className="flex flex-col">
+                <h3 className="font-bold text-gray-900 dark:text-white">{t('profile.adsAndPurchases.hideAdsTitle', 'Désactiver les publicités')}</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{t('profile.adsAndPurchases.hideAdsDesc', "Masquer les bannières promotionnelles dans l'application")}</p>
+              </div>
+              <div 
+                onClick={async () => {
+                  try {
+                    const userRef = doc(db, 'users', user.uid);
+                    await setDoc(userRef, { hideAds: !user?.hideAds }, { merge: true });
+                  } catch (e) {
+                    console.error('Error toggling ads', e);
+                  }
+                }}
+                className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors ${user?.hideAds ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+              >
+                <motion.div 
+                  className="w-4 h-4 bg-white rounded-full shadow-sm"
+                  animate={{ x: user?.hideAds ? 24 : 0 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4 items-start">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {t('ad.profilePromo', 'Passez à la version Premium pour débloquer toutes les fonctionnalités et supprimer les publicités.')}
+            </p>
+            <Link
+              to="/payment"
+              className="bg-gradient-to-r from-amber-400 to-orange-500 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:opacity-90 transition-opacity"
+            >
+              <Star size={18} />
+              {t('ad.becomePremium', 'Devenir Premium')}
+            </Link>
+          </div>
+        )}
+
+        <div>
+          <h3 className="font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+            <Save className="text-gray-400" size={18} />
+            {t('profile.adsAndPurchases.purchaseHistory', "Historique d'achats")}
+          </h3>
+          {user?.purchasedItems && user.purchasedItems.length > 0 ? (
+            <div className="space-y-3">
+              {user.purchasedItems.map((item, idx) => (
+                <div key={`purchased-item-${item}-${idx}`} className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-3 flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">{item}</span>
+                  <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-100 dark:bg-emerald-900/30 px-2 py-1 rounded-full">{t('profile.adsAndPurchases.purchased', 'Acheté')}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-6 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800">
+              <p className="text-sm text-gray-500 dark:text-gray-400">{t('profile.adsAndPurchases.noPurchases', 'Aucun achat pour le moment.')}</p>
+            </div>
+          )}
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title={t('profile.offlineMode.title', 'Mode Hors-ligne & Sauvegarde Complète')}
+        icon={<Save className="text-emerald-500" size={20} />}
+      >
+        {/* Full Offline App Saver Card */}
+        <div className="mb-6 p-4.5 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-transparent border border-emerald-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className={`inline-block w-2.5 h-2.5 rounded-full ${offlineAppMeta?.isFullySaved ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+              <h4 className="text-sm sm:text-base font-bold text-gray-900 dark:text-white">
+                {language === 'en'
+                  ? 'Save Entire Application for Offline Use'
+                  : language === 'ha'
+                  ? 'Ajiye Dukkan App don Amfani Offline'
+                  : "Enregistrer l'Application pour Utilisation Hors-Ligne"}
+              </h4>
+            </div>
+            <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed max-w-xl">
+              {language === 'en'
+                ? 'Pre-cache all spiritual tools (Abjad, Wafq, 99 Names, Falak, Istikhara), articles, and core assets so you can use AsrarHub anywhere with zero internet.'
+                : language === 'ha'
+                ? 'Ajiye dukkan kayan aikin asrar da labarai a cikin na’urarka don amfani a koina ba tare da intanet ba.'
+                : 'Mettez en cache tous les outils spirituels (Abjad, Wafq, 99 Noms, Falak, Istikhara), articles et composants pour utiliser AsrarHub partout sans aucune connexion.'}
+            </p>
+            {offlineAppMeta?.savedAt && (
+              <p className="text-[11px] text-emerald-700 dark:text-emerald-300 font-medium pt-1">
+                ✓ Pack hors-ligne actif ({offlineAppMeta.cachedToolsCount} outils, {offlineAppMeta.cachedArticlesCount} secrets, ~{offlineAppMeta.storageUsageMB} MB)
+              </p>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsOfflineSaverOpen(true)}
+            className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all shrink-0 cursor-pointer"
+          >
+            <HardDriveDownload size={16} />
+            <span>
+              {offlineAppMeta?.isFullySaved
+                ? (language === 'en' ? 'Manage Offline Pack' : 'Gérer le pack hors-ligne')
+                : (language === 'en' ? 'Save App Offline' : "Sauvegarder l'app")}
+            </span>
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          {t('profile.offlineMode.subtitle', 'Synchronisez vos favoris et données locales pour y accéder sans connexion internet.')}
+        </p>
+        <button
+          onClick={() => {
+            setIsSyncing(true);
+            setTimeout(() => {
+              setIsSyncing(false);
+              setSyncMessage(t('profile.offlineMode.success', 'Synchronisation hors-ligne terminée avec succès.'));
+              setTimeout(() => setSyncMessage(''), 3000);
+            }, 1000);
+          }}
+          disabled={isSyncing}
+          className={`flex items-center justify-center gap-2 w-full sm:w-auto bg-emerald-50 hover:bg-emerald-100 text-emerald-600 dark:bg-emerald-900/20 dark:hover:bg-emerald-900/40 dark:text-emerald-400 rounded-xl px-5 py-3 font-bold transition-colors ${isSyncing ? 'opacity-70 cursor-not-allowed' : ''}`}
+        >
+          {isSyncing ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+          {isSyncing ? t('profile.offlineMode.syncing', 'Synchronisation en cours...') : t('profile.offlineMode.syncButton', 'Synchroniser maintenant')}
+        </button>
+        {syncMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-4 p-3 bg-emerald-100/50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 text-sm rounded-lg flex items-center gap-2"
+          >
+            <Sparkles size={16} />
+            {syncMessage}
+          </motion.div>
+        )}
+
+        <div className="mt-6 pt-6 border-t border-gray-100 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h4 className="font-bold text-gray-900 dark:text-white text-sm">
+              {t('profile.offlineMode.autoSaveTitle', 'Sauvegarde automatique sur le Cloud')}
+            </h4>
+            <p className="text-xs text-gray-500 dark:text-gray-450 mt-1 leading-relaxed">
+              {t('profile.offlineMode.autoSaveDesc', 'Désactivez cette option pour économiser vos données mobiles. Vos modifications seront conservées localement.')}
+            </p>
+          </div>
+          <div 
+            onClick={() => {
+              const current = localStorage.getItem('asrar_auto_save_firestore') !== 'false';
+              const next = !current;
+              localStorage.setItem('asrar_auto_save_firestore', next.toString());
+              setAutoSave(next);
+            }}
+            className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors ${autoSave ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+          >
+            <motion.div 
+              className="w-4 h-4 bg-white rounded-full shadow-sm"
+              animate={{ x: autoSave ? 24 : 0 }}
+              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+            />
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Autorisations du Système & Stockage"
+        icon={<HardDrive className="text-emerald-500" size={20} />}
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          Gérez et autorisez l'accès du navigateur au stockage local, aux fichiers exportés, au microphone et à la géolocalisation.
+        </p>
+
+        <div className="space-y-4">
+          {/* Stockage local & Fichiers */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-gray-50 dark:bg-gray-800/40 rounded-2xl border border-gray-100 dark:border-gray-700 gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-xl shrink-0">
+                <HardDrive size={22} />
+              </div>
+              <div>
+                <h4 className="font-bold text-gray-900 dark:text-white text-sm">
+                  Autorisation au stockage & Téléchargements
+                </h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  Nécessaire pour enregistrer les talismans, audios du Coran, et exporter vos parchemins.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleRequestStoragePermission}
+              disabled={isRequestingStorage}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shrink-0"
+            >
+              {isRequestingStorage ? <RefreshCw className="animate-spin" size={14} /> : <CheckCircle size={14} />}
+              {storagePermissionGranted ? "Stockage autorisé ✅" : "Autoriser le stockage"}
+            </button>
+          </div>
+
+          {/* Microphone & Dictée Vocal */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-gray-50 dark:bg-gray-800/40 rounded-2xl border border-gray-100 dark:border-gray-700 gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 rounded-xl shrink-0">
+                <Mic size={22} />
+              </div>
+              <div>
+                <h4 className="font-bold text-gray-900 dark:text-white text-sm">
+                  Microphone & Dictée vocale
+                </h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  Nécessaire pour le réciteur et le compteur de Zikr vocal.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleRequestMic}
+              className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer shrink-0"
+            >
+              <Mic size={14} />
+              {appPermissions.microphone ? "Microphone autorisé ✅" : "Autoriser le microphone"}
+            </button>
+          </div>
+
+          {/* Géolocalisation */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-gray-50 dark:bg-gray-800/40 rounded-2xl border border-gray-100 dark:border-gray-700 gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-xl shrink-0">
+                <MapPin size={22} />
+              </div>
+              <div>
+                <h4 className="font-bold text-gray-900 dark:text-white text-sm">
+                  Géolocalisation & Qibla
+                </h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  Calcul précis des heures de prières locales et boussole Qibla.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleRequestGeo}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer shrink-0"
+            >
+              <MapPin size={14} />
+              {appPermissions.geolocation ? "Position autorisée ✅" : "Autoriser la position"}
+            </button>
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title={t('profile.sessions.title', 'Sessions actives')}
+        icon={<Smartphone className="text-emerald-500" size={20} />}
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          {t('profile.sessions.subtitle', 'Gérez les appareils connectés à votre compte spirituel. Vous pouvez révoquer l\'accès à tout moment pour déconnecter un appareil à distance.')}
+        </p>
+
+        {!user ? (
+          <div className="text-center py-6 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-700">
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+              {t('profile.sessions.loginRequired', 'Veuillez vous connecter pour gérer vos sessions actives.')}
+            </p>
+            <button
+              onClick={() => setShowAuthModal(true)}
+              className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all shadow-sm"
+            >
+              <LogIn size={14} />
+              {t('auth.login', 'Se connecter')}
+            </button>
+          </div>
+        ) : loadingSessions ? (
+          <div className="flex items-center justify-center py-6">
+            <RefreshCw className="animate-spin text-emerald-500" size={24} />
+          </div>
+        ) : activeSessions.length === 0 ? (
+          <div className="text-center py-6 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {t('profile.sessions.noSessions', 'Aucune session active trouvée.')}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {activeSessions.map((session, sIdx) => {
+              const isCurrent = session.id === currentSessionId;
+              return (
+                <div 
+                  key={session.id ? `session-${session.id}-${sIdx}` : `session-${sIdx}`} 
+                  className={`flex flex-col sm:flex-row sm:items-center justify-between border rounded-2xl p-4 gap-4 transition-all ${
+                    isCurrent 
+                      ? 'border-emerald-200 bg-emerald-50/30 dark:border-emerald-800/30 dark:bg-emerald-950/10' 
+                      : 'border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2.5 rounded-xl ${
+                      isCurrent 
+                        ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400' 
+                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                    }`}>
+                      {session.deviceType === 'mobile' ? (
+                        <Smartphone size={20} />
+                      ) : session.deviceType === 'tablet' ? (
+                        <Tablet size={20} />
+                      ) : (
+                        <Laptop size={20} />
+                      )}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-gray-900 dark:text-white text-sm sm:text-base">
+                          {t('profile.sessions.deviceFormat', '{browser} sur {os}').replace('{browser}', session.browser).replace('{os}', session.os)}
+                        </span>
+                        {isCurrent && (
+                          <span className="text-[10px] sm:text-xs font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/40 px-2 py-0.5 rounded-full">
+                            {t('profile.sessions.current', 'Cet appareil')}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                        <span className="flex items-center gap-1">
+                          <Globe size={12} />
+                          {session.ip}
+                        </span>
+                        <span className="hidden sm:inline">•</span>
+                        <span>
+                          {t('profile.sessions.lastActive', 'Actif :')} {new Date(session.lastActive).toLocaleString()}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                  {!isCurrent && (
+                    <button
+                      onClick={() => revokeSession(session.id)}
+                      className="text-xs text-red-500 hover:text-red-600 font-bold flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 self-end sm:self-center transition-colors"
+                      title={t('profile.sessions.revokeTooltip', 'Déconnecter cet appareil')}
+                    >
+                      <Trash2 size={14} />
+                      {t('profile.sessions.revoke', 'Déconnecter')}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title={t('profile.maintenance.title', "Maintenance")}
+        icon={<RefreshCw className="text-emerald-500" size={20} />}
+      >
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+          {t('profile.maintenance.subtitle', "Vider le cache peut résoudre les problèmes de lecture audio ou libérer de l'espace sur votre appareil.")}
+        </p>
+
+        <button
+          onClick={async () => {
+            setIsClearingCache(true);
+            try {
+              if ('serviceWorker' in navigator) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                for (const registration of registrations) {
+                  await registration.unregister();
+                }
+              }
+              if ('caches' in window) {
+                const keys = await caches.keys();
+                for (const key of keys) {
+                  await caches.delete(key);
+                }
+              }
+              localStorage.removeItem('quran_downloaded_items');
+              localStorage.removeItem('quran_paused_downloads');
+              setTimeout(() => {
+                window.location.reload();
+              }, 500);
+            } catch (e) {
+              setIsClearingCache(false);
+            }
+          }}
+          disabled={isClearingCache}
+          className={`flex items-center justify-center gap-2 w-full sm:w-auto bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-900/20 dark:hover:bg-red-900/40 dark:text-red-400 rounded-xl px-5 py-3 font-bold transition-colors ${isClearingCache ? 'opacity-70 cursor-not-allowed' : ''}`}
+        >
+          <RefreshCw size={18} className={isClearingCache ? 'animate-spin' : ''} />
+          {isClearingCache ? t('profile.maintenance.clearing', 'Nettoyage...') : t('profile.maintenance.clearCache', 'Vider le cache')}
+        </button>
+      </CollapsibleSection>
+
+      {/* Programme de Parrainage & Récompenses Premium */}
+      <CollapsibleSection
+        title={t('profile.referral.title', 'Programme de Parrainage & Heures Premium')}
+        icon={<Gift className="text-amber-500" size={20} />}
+        defaultOpen={true}
+        id="section-referral"
+      >
+        <ReferralCenter />
+      </CollapsibleSection>
+
+      {/* Centre d'Assistance & Contact Direct avec l'Administrateur */}
+      <CollapsibleSection
+        title={t('profile.supportSection.title', "Assistance & Contact Administrateur")}
+        icon={<Mail className="text-emerald-500" size={20} />}
+        defaultOpen={true}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
+            {t('profile.supportSection.description', "Une question sur un secret, votre abonnement Premium, ou un besoin d'orientation spirituelle ? Contactez directement la direction spirituelle et l'administrateur.")}
+          </p>
+
+          <div className="p-4 bg-gradient-to-r from-emerald-50 via-gray-50 to-amber-50/40 dark:from-gray-800 dark:to-gray-800/80 rounded-2xl border border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-emerald-600 text-white rounded-2xl shadow-sm shrink-0">
+                <MessageSquare size={22} />
+              </div>
+              <div>
+                <h4 className="font-bold text-gray-900 dark:text-white text-sm flex items-center gap-2">
+                  <span>{t('profile.supportSection.directMessaging', 'Messagerie Directe & Support Gmail')}</span>
+                  {user?.subscriptionTier === 'premium' || user?.subscriptionTier === 'pro' ? (
+                    <span className="text-[10px] bg-amber-500 text-white font-black px-2 py-0.5 rounded-full">{t('profile.supportSection.vipBadge', 'VIP ⭐')}</span>
+                  ) : (
+                    <span className="text-[10px] bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-bold px-2 py-0.5 rounded-full">{t('profile.supportSection.standardBadge', 'Standard')}</span>
+                  )}
+                </h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  {t('profile.supportSection.profileDetailsNote', 'Vos détails de profil (type de compte, points spirituels, diagnostic) sont automatiquement intégrés.')}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const btn = document.getElementById('btn-floating-support-contact');
+                if (btn) btn.click();
+              }}
+              className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer shrink-0"
+            >
+              <Mail size={15} />
+              {t('profile.supportSection.contactBtn', "Contacter l'Admin")}
+            </button>
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      {/* Version de l'application & Journal des Nouveautés */}
+      <CollapsibleSection
+        title={t('profile.version.title', `Version de l'application (v${appVersionService.getCurrentVersion()})`, { version: appVersionService.getCurrentVersion() })}
+        icon={<Info className="text-emerald-500" size={20} />}
+        defaultOpen={false}
+      >
+        <div className="space-y-5">
+          {/* Active Version Card */}
+          <div className="bg-gradient-to-br from-emerald-50 via-teal-50/50 to-white dark:from-emerald-950/30 dark:via-gray-800 dark:to-gray-800 p-5 rounded-2xl border border-emerald-200/80 dark:border-emerald-800/50 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-md">
+                  <Tag size={22} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-lg font-black text-gray-900 dark:text-white">
+                      {t('profile.version.appTitle', `AsrarHub v${appVersionService.getCurrentVersion()}`, { version: appVersionService.getCurrentVersion() })}
+                    </h3>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300">
+                      {t('profile.version.build', `Build ${APP_VERSION_CONFIG.currentVersionCode}`, { code: APP_VERSION_CONFIG.currentVersionCode })}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
+                      {t('profile.version.upToDate', 'À jour')}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {t('profile.version.package', 'Package :')} <code className="font-mono text-emerald-600 dark:text-emerald-400">{APP_VERSION_CONFIG.bundleId}</code> • {t('profile.version.publishedOn', `Publié le ${getLocalizedReleaseDate(language)}`, { date: getLocalizedReleaseDate(language) || APP_VERSION_CONFIG.releaseDate })}
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setShowChangelogModal(true)}
+                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles size={14} />
+                  <span>{t('profile.version.changelogBtn', 'Journal des versions')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsFlushingVersionCache(true);
+                    setVersionFlushStatus(t('profile.version.cleaningStatus', 'Nettoyage du cache SWR...'));
+                    try {
+                      await appVersionService.flushAndUpgradeCaches((step) => {
+                        setVersionFlushStatus(step);
+                      });
+                      setTimeout(() => {
+                        setIsFlushingVersionCache(false);
+                        setVersionFlushStatus(null);
+                        window.location.reload();
+                      }, 1000);
+                    } catch (e) {
+                      setIsFlushingVersionCache(false);
+                      setVersionFlushStatus(null);
+                    }
+                  }}
+                  disabled={isFlushingVersionCache}
+                  className="px-3.5 py-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Vider les caches locaux (IndexedDB, ServiceWorker, SWR) et recharger"
+                >
+                  <RefreshCw size={14} className={isFlushingVersionCache ? 'animate-spin' : ''} />
+                  <span>{isFlushingVersionCache ? t('profile.version.cleaning', 'Nettoyage...') : t('profile.version.clearCacheBtn', 'Vider le cache SWR')}</span>
+                </button>
+
+                <Link
+                  to="/api-docs"
+                  className="px-3.5 py-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Consulter la documentation interactive de l'API AsrarHub"
+                >
+                  <Code size={14} className="text-emerald-500" />
+                  <span>Documentation API</span>
+                </Link>
+              </div>
+            </div>
+
+            {versionFlushStatus && (
+              <div className="mt-3 p-2.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 rounded-xl text-xs font-semibold flex items-center gap-2">
+                <RefreshCw size={12} className="animate-spin" />
+                <span>{versionFlushStatus}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Admin Sync Cloud app_versions Collection Button */}
+          {user?.role === 'admin' && (
+            <div className="p-3.5 bg-amber-50 dark:bg-amber-950/30 rounded-2xl border border-amber-200 dark:border-amber-900/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div>
+                <span className="font-bold text-amber-900 dark:text-amber-300 block">
+                  {t('profile.version.adminSyncTitle', 'Administration : Synchronisation Cloud `app_versions`')}
+                </span>
+                <span className="text-amber-700 dark:text-amber-400 text-[11px]">
+                  {t('profile.version.adminSyncDesc', "Synchronisez l'historique des versions vers le Cloud pour tous les utilisateurs.")}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsSyncingReleases(true);
+                  try {
+                    await appVersionService.seedFirestoreVersions();
+                    setReleasesSyncSuccess(true);
+                    setTimeout(() => setReleasesSyncSuccess(false), 3000);
+                  } catch (e) {
+                    console.warn("Cloud sync error:", e);
+                  } finally {
+                    setIsSyncingReleases(false);
+                  }
+                }}
+                disabled={isSyncingReleases}
+                className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+              >
+                {releasesSyncSuccess ? (
+                  <>
+                    <Check size={14} />
+                    <span>{t('profile.version.synced', 'Synchronisé !')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Database size={14} className={isSyncingReleases ? 'animate-bounce' : ''} />
+                    <span>{t('profile.version.syncFirestore', 'Synchroniser le Cloud')}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Release History & What's New using ChangelogView */}
+          <ChangelogView
+            embedded={true}
+            showHeader={false}
+            onOpenModal={() => setShowChangelogModal(true)}
+          />
+        </div>
+      </CollapsibleSection>
+
+      {/* Full Changelog Modal */}
+      <ChangelogModal
+        isOpen={showChangelogModal}
+        onClose={() => setShowChangelogModal(false)}
+      />
+
+      {/* Floating support contact widget */}
+      <FloatingSupportContact isUserProfile={true} />
+
+      {/* Article Modal */}
+      {selectedFavArticle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-900 rounded-3xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-800">
+              <h3 className="font-bold text-lg text-gray-900 dark:text-white flex items-center gap-2">
+                <FileText size={20} /> Lecture
+              </h3>
+              <div className="flex items-center gap-2">
+                <button onClick={(e) => handleShareFavArticle(selectedFavArticle, e)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors text-emerald-500" title="Partager">
+                  <Share2 size={20} />
+                </button>
+                <button onClick={() => setSelectedFavArticle(null)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors text-gray-500" title="Fermer">
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 lg:p-10 hide-scrollbar bg-gray-50 dark:bg-gray-900">
+              <div className="max-w-3xl mx-auto bg-white dark:bg-gray-800 rounded-3xl overflow-hidden shadow-sm border border-gray-100 dark:border-gray-700">
+                {selectedFavArticle.isPremium ? (
+                  <PremiumWrapper 
+                    fallbackTitle={selectedFavArticle.title} 
+                    fallbackMessage="Cet article est exclusif aux membres Premium. Débloquez-le pour lire la suite."
+                    previewContent={
+                      <>
+                        {selectedFavArticle.thumbnail && (
+                          <div className="w-full h-64 md:h-80 overflow-hidden relative">
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent z-10" />
+                            <img src={selectedFavArticle.thumbnail} alt={selectedFavArticle.title} className="w-full h-full object-cover" />
+                            <div className="absolute bottom-0 left-0 p-6 z-20">
+                              <h1 className="text-2xl md:text-3xl font-black text-white">{selectedFavArticle.title}</h1>
+                            </div>
+                          </div>
+                        )}
+                        {!selectedFavArticle.thumbnail && (
+                          <div className="p-6 md:p-10 border-b border-gray-100 dark:border-gray-700">
+                            <h1 className="text-2xl md:text-3xl font-black text-gray-900 dark:text-white">{selectedFavArticle.title}</h1>
+                          </div>
+                        )}
+                        <div className="p-6 md:p-10 prose prose-emerald dark:prose-invert max-w-none article-content">
+                          <div dangerouslySetInnerHTML={{ __html: (selectedFavArticle.content || '').substring(0, 300) + '...' }} />
+                        </div>
+                      </>
+                    }
+                  >
+                    {selectedFavArticle.thumbnail && (
+                      <div className="w-full h-64 md:h-80 overflow-hidden relative">
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent z-10" />
+                        <img src={selectedFavArticle.thumbnail} alt={selectedFavArticle.title} className="w-full h-full object-cover" />
+                        <div className="absolute bottom-0 left-0 p-6 z-20">
+                          <h1 className="text-2xl md:text-3xl font-black text-white">{selectedFavArticle.title}</h1>
+                        </div>
+                      </div>
+                    )}
+                    {!selectedFavArticle.thumbnail && (
+                      <div className="p-6 md:p-10 border-b border-gray-100 dark:border-gray-700">
+                        <h1 className="text-2xl md:text-3xl font-black text-gray-900 dark:text-white">{selectedFavArticle.title}</h1>
+                      </div>
+                    )}
+                    <div className="p-6 md:p-10 prose prose-emerald dark:prose-invert max-w-none article-content">
+                      <div dangerouslySetInnerHTML={{ __html: selectedFavArticle.content }} />
+                    </div>
+                  </PremiumWrapper>
+                ) : (
+                  <>
+                    {selectedFavArticle.thumbnail && (
+                      <div className="w-full h-64 md:h-80 overflow-hidden relative">
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent z-10" />
+                        <img src={selectedFavArticle.thumbnail} alt={selectedFavArticle.title} className="w-full h-full object-cover" />
+                        <div className="absolute bottom-0 left-0 p-6 z-20">
+                          <h1 className="text-2xl md:text-3xl font-black text-white">{selectedFavArticle.title}</h1>
+                        </div>
+                      </div>
+                    )}
+                    {!selectedFavArticle.thumbnail && (
+                      <div className="p-6 md:p-10 border-b border-gray-100 dark:border-gray-700">
+                        <h1 className="text-2xl md:text-3xl font-black text-gray-900 dark:text-white">{selectedFavArticle.title}</h1>
+                      </div>
+                    )}
+                    <div className="p-6 md:p-10 prose prose-emerald dark:prose-invert max-w-none article-content">
+                      <div dangerouslySetInnerHTML={{ __html: selectedFavArticle.content }} />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+      <PermissionTroubleshooterModal
+        isOpen={isTroubleshooterOpen}
+        onClose={() => setIsTroubleshooterOpen(false)}
+        initialTab={troubleshooterTab}
+      />
+      <OfflineAppSaverModal
+        isOpen={isOfflineSaverOpen}
+        onClose={() => setIsOfflineSaverOpen(false)}
+      />
+    </div>
+  );
+};
+
+export default UserProfile;

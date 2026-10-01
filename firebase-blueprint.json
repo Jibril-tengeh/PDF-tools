@@ -1,0 +1,132 @@
+{
+  "project_id": "seraphic-oxide-jcf5x",
+  "authentication": {
+    "enabled": true,
+    "providers": ["google.com", "password"]
+  },
+  "firestore": {
+    "enabled": true,
+    "collections": [
+      {
+        "name": "users",
+        "document_id": "userId",
+        "fields": [
+          { "name": "email", "type": "string" },
+          { "name": "name", "type": "string" },
+          { "name": "role", "type": "string" },
+          { "name": "isBanned", "type": "boolean" },
+          { "name": "mysteryToolsDisabled", "type": "boolean" },
+          { "name": "isTrusted", "type": "boolean" },
+          { "name": "createdAt", "type": "timestamp" }
+        ]
+      },
+      {
+        "name": "lexique_terms",
+        "document_id": "auto-generated",
+        "fields": [
+          { "name": "word", "type": "string" },
+          { "name": "definition", "type": "string" },
+          { "name": "category", "type": "string" }
+        ]
+      },
+      {
+        "name": "ruqyah_audios",
+        "document_id": "auto-generated",
+        "fields": [
+          { "name": "title", "type": "string" },
+          { "name": "url", "type": "string" },
+          { "name": "duration", "type": "string" },
+          { "name": "isActive", "type": "boolean" }
+        ]
+      },
+      {
+        "name": "community_posts",
+        "document_id": "auto-generated",
+        "fields": [
+          { "name": "authorId", "type": "string" },
+          { "name": "authorName", "type": "string" },
+          { "name": "content", "type": "string" },
+          { "name": "status", "type": "string" },
+          { "name": "createdAt", "type": "timestamp" }
+        ]
+      },
+      {
+        "name": "notifications",
+        "document_id": "auto-generated",
+        "fields": [
+          { "name": "title", "type": "string" },
+          { "name": "message", "type": "string" },
+          { "name": "createdAt", "type": "timestamp" }
+        ]
+      },
+      {
+        "name": "promo_codes",
+        "document_id": "code",
+        "fields": [
+          { "name": "code", "type": "string" },
+          { "name": "type", "type": "string" },
+          { "name": "discountType", "type": "string" },
+          { "name": "discountValue", "type": "number" },
+          { "name": "subscriptionMonths", "type": "number" },
+          { "name": "productId", "type": "string" },
+          { "name": "maxUses", "type": "number" },
+          { "name": "uses", "type": "number" },
+          { "name": "expiryDate", "type": "number" },
+          { "name": "isActive", "type": "boolean" },
+          { "name": "createdAt", "type": "number" }
+        ]
+      },
+      {
+        "name": "pdf_documents",
+        "document_id": "docId",
+        "fields": [
+          { "name": "title", "type": "string" },
+          { "name": "description", "type": "string" },
+          { "name": "author", "type": "string" },
+          { "name": "category", "type": "string" },
+          { "name": "coverUrl", "type": "string" },
+          { "name": "pagesCount", "type": "number" },
+          { "name": "fileSize", "type": "string" },
+          { "name": "isPremium", "type": "boolean" },
+          { "name": "isForSale", "type": "boolean" },
+          { "name": "freeForVip", "type": "boolean" },
+          { "name": "price", "type": "number" },
+          { "name": "currency", "type": "string" },
+          { "name": "publishedAt", "type": "string" }
+        ]
+      },
+      {
+        "name": "pdf_purchases",
+        "document_id": "purchaseId",
+        "fields": [
+          { "name": "userId", "type": "string" },
+          { "name": "userEmail", "type": "string" },
+          { "name": "pdfId", "type": "string" },
+          { "name": "pdfTitle", "type": "string" },
+          { "name": "amount", "type": "number" },
+          { "name": "currency", "type": "string" },
+          { "name": "paymentMethod", "type": "string" },
+          { "name": "paymentReference", "type": "string" },
+          { "name": "status", "type": "string" },
+          { "name": "purchasedAt", "type": "string" },
+          { "name": "securityHash", "type": "string" }
+        ]
+      },
+      {
+        "name": "pdf_download_links",
+        "document_id": "pdfId",
+        "fields": [
+          { "name": "pdfId", "type": "string" },
+          { "name": "downloadUrl", "type": "string" },
+          { "name": "pdfUrl", "type": "string" },
+          { "name": "title", "type": "string" },
+          { "name": "isPremium", "type": "boolean" },
+          { "name": "isForSale", "type": "boolean" },
+          { "name": "freeForVip", "type": "boolean" },
+          { "name": "price", "type": "number" },
+          { "name": "updatedAt", "type": "timestamp" }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,211 @@
+import React, { useRef, useState } from 'react';
+import { X, Printer, Download, Sparkles, Feather, Users, Check } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { exportElementToCanvas } from '../utils/exportSerializationHelper';
+import { downloadCanvasImage } from '../utils/downloadHelper';
+import { useLanguage } from '../contexts/LanguageContext';
+import { AsrarHubWatermark } from './AsrarHubWatermark';
+import { ShareToCommunityModal } from './ShareToCommunityModal';
+
+interface ParchmentExporterModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: string;
+  content: React.ReactNode;
+  recipientName?: string;
+  abjadWeight?: number;
+}
+
+export const ParchmentExporterModal: React.FC<ParchmentExporterModalProps> = ({
+  isOpen,
+  onClose,
+  title,
+  subtitle,
+  content,
+  recipientName,
+  abjadWeight,
+}) => {
+  const { t } = useLanguage();
+  const parchmentRef = useRef<HTMLDivElement>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [isCommunityModalOpen, setIsCommunityModalOpen] = useState(false);
+
+  if (!isOpen) return null;
+
+  const handleDownload = async () => {
+    if (!parchmentRef.current || isExporting) return;
+    setIsExporting(true);
+    try {
+      const el = parchmentRef.current;
+      
+      // Calculate true natural unconstrained dimensions based on element
+      const fullWidth = Math.ceil(Math.max(el.scrollWidth, el.offsetWidth, el.clientWidth, el.getBoundingClientRect().width));
+      const fullHeight = Math.ceil(Math.max(el.scrollHeight, el.offsetHeight, el.clientHeight, el.getBoundingClientRect().height));
+
+      const canvas = await exportElementToCanvas(el, '#fef3c7', { 
+        pixelRatio: 2.5,
+        width: fullWidth,
+        height: fullHeight,
+      });
+      const cleanTitle = title.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+      // Skip the dark overlay footer bar because parchment has its own authentic sacred watermark, borders & footer stamp
+      await downloadCanvasImage(canvas, `parchemin_rituel_${cleanTitle}.png`, true);
+      setIsSuccess(true);
+      setTimeout(() => setIsSuccess(false), 3000);
+    } catch (err) {
+      console.error('Error exporting parchment:', err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <AnimatePresence>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-md overflow-y-auto">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95, y: 10 }}
+          className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 border border-amber-500/30 rounded-3xl shadow-2xl overflow-hidden my-auto"
+        >
+          {/* Top Bar / Actions */}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-amber-500/20 bg-amber-50/80 dark:bg-zinc-950/80">
+            <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-semibold text-sm">
+              <Feather className="w-4 h-4 text-amber-600 dark:text-amber-500" />
+              <span>
+                {t('parchmentModal.headerTitle', 'Fiche Rituelle / Parchemin Sacré')}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsCommunityModalOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all shadow-md cursor-pointer"
+                title="Envoyer ce Parchemin directement dans la Communauté"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Communauté</span>
+              </button>
+              <button
+                onClick={handlePrint}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-100 dark:bg-zinc-800 text-amber-900 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-zinc-700 text-xs font-medium transition-colors cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>{t('parchmentModal.print', 'Imprimer')}</span>
+              </button>
+              <button
+                onClick={handleDownload}
+                disabled={isExporting}
+                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-xl font-bold text-xs transition-colors shadow-lg cursor-pointer disabled:opacity-50 ${
+                  isSuccess
+                    ? 'bg-emerald-500 text-white'
+                    : 'bg-amber-500 hover:bg-amber-600 text-zinc-950'
+                }`}
+              >
+                {isSuccess ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-white" />
+                    <span>Téléchargé !</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    <span>
+                      {isExporting ? '...' : t('parchmentModal.download', 'Télécharger Image')}
+                    </span>
+                  </>
+                )}
+              </button>
+              <button
+                onClick={onClose}
+                className="p-1.5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Share to Community Modal */}
+            <ShareToCommunityModal
+              isOpen={isCommunityModalOpen}
+              onClose={() => setIsCommunityModalOpen(false)}
+              title="Publier le Parchemin Sacré dans la Communauté"
+              category="parchemin"
+              itemTitle={title}
+              detailsText={`Titre du Parchemin : ${title}\n${subtitle ? 'Sous-titre : ' + subtitle + '\n' : ''}${
+                recipientName ? 'Destinataire : ' + recipientName + '\n' : ''
+              }${abjadWeight ? 'Poids Abjad (Zimām) : ' + abjadWeight + '\n' : ''}`}
+            />
+          </div>
+
+          {/* Renderable Parchment Canvas Container */}
+          <div className="p-2 sm:p-6 overflow-y-auto max-h-[75vh] flex justify-center w-full">
+            <div
+              ref={parchmentRef}
+              className="w-full max-w-xl p-3.5 sm:p-8 rounded-2xl bg-amber-50 text-amber-950 border-4 border-double border-amber-700/60 shadow-inner relative overflow-hidden font-serif"
+              style={{
+                backgroundColor: '#fef3c7',
+                color: '#451a03',
+                backgroundImage:
+                  'radial-gradient(#d97706 0.5px, transparent 0.5px), radial-gradient(#d97706 0.5px, #fef3c7 0.5px)',
+                backgroundSize: '20px 20px',
+                backgroundPosition: '0 0, 10px 10px',
+              }}
+            >
+              {/* AsrarHub Engraved Watermark */}
+              <AsrarHubWatermark variant="parchment" opacity={0.12} showCentralSeal={true} />
+              {/* Corner Ornaments */}
+              <div className="absolute top-2 left-2 text-amber-800/40 text-lg select-none">✦</div>
+              <div className="absolute top-2 right-2 text-amber-800/40 text-lg select-none">✦</div>
+              <div className="absolute bottom-2 left-2 text-amber-800/40 text-lg select-none">✦</div>
+              <div className="absolute bottom-2 right-2 text-amber-800/40 text-lg select-none">✦</div>
+
+              {/* Bismillah Header */}
+              <div className="text-center mb-4 sm:mb-6">
+                <p className="font-uthmani text-xs sm:text-sm text-[#5c2406] font-bold tracking-wider mb-1 bg-[#fde68a]/90 border border-[#b45309]/50 px-3 sm:px-4 py-1 rounded-xl inline-block shadow-sm">
+                  بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ
+                </p>
+                <p className="text-[11px] sm:text-xs text-amber-800/80 font-mono tracking-widest uppercase">
+                  {t('parchmentModal.sacredTreatiseSubtitle', 'AsrarHub Traité Sacré & Fiche Rituelle')}
+                </p>
+                <div className="w-24 h-0.5 bg-gradient-to-r from-transparent via-amber-700 to-transparent mx-auto mt-2" />
+              </div>
+
+              {/* Title & Metadata */}
+              <div className="text-center mb-4 sm:mb-6">
+                <h2 className="text-base sm:text-xl font-extrabold text-amber-950 uppercase tracking-wide">
+                  {title}
+                </h2>
+                {subtitle && <p className="text-xs italic text-amber-800 mt-1">{subtitle}</p>}
+                {(recipientName || abjadWeight) && (
+                  <div className="flex justify-center items-center gap-2 sm:gap-4 mt-2 sm:mt-3 text-xs text-amber-900 bg-amber-200/50 py-1 px-3 sm:px-4 rounded-full max-w-fit mx-auto border border-amber-400/40 font-sans font-medium">
+                    {recipientName && <span>{t('parchmentModal.name', 'Nom :')} <strong>{recipientName}</strong></span>}
+                    {abjadWeight && <span>{t('parchmentModal.weight', 'Poids (Zimām) :')} <strong>{abjadWeight}</strong></span>}
+                  </div>
+                )}
+              </div>
+
+              {/* Main Content Render */}
+              <div className="my-3 sm:my-6 p-2 sm:p-4 bg-amber-100/60 rounded-xl border border-amber-600/30 text-center font-serif text-sm leading-relaxed text-amber-950 w-full">
+                {content}
+              </div>
+
+              {/* Footer Stamp */}
+              <div className="pt-3 sm:pt-4 border-t border-amber-800/20 text-center flex items-center justify-between text-[10px] sm:text-[11px] text-amber-800 font-sans">
+                <div className="flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-amber-600" />
+                  <span>{t('parchmentModal.drawnBy', 'Conscripteur : AsrarHub Ruhaniyat')}</span>
+                </div>
+                <span>{t('parchmentModal.authenticSeal', 'Sceau Authentique — Sirr Al-Asrar')}</span>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    </AnimatePresence>
+  );
+};

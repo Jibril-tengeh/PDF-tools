@@ -1,0 +1,563 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Cloud, CloudOff, RefreshCw, Database, Check, Info, Server, Wifi, WifiOff, AlertCircle, HardDrive } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { db, isAutoSaveEnabled } from '../lib/firebase';
+import { doc, getDocFromServer } from 'firebase/firestore';
+import { getSWRCacheStats, SWRCacheStats, revalidatePublishedArticles, SWR_EVENT_NAME } from '../lib/swrArticleCache';
+import { pingFirestore } from '../utils/networkLogger';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
+
+export const SyncStatusBadge: React.FC = () => {
+  const { user } = useAuth();
+  const { language } = useLanguage();
+  const { isOnline, isChecking, recheckNetwork } = useNetworkStatus();
+  const [syncState, setSyncState] = useState<'synced' | 'syncing' | 'offline' | 'guest' | 'cache'>('synced');
+  const [showPopover, setShowPopover] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(new Date());
+  const [isForcingSync, setIsForcingSync] = useState(false);
+  const [showSuccessMsg, setShowSuccessMsg] = useState(false);
+  const [swrStats, setSwrStats] = useState<SWRCacheStats | null>(null);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  // Localization strings
+  const strings = {
+    fr: {
+      title: 'Sauvegarde Cloud & Synchro',
+      synced: 'Données synchronisées',
+      syncedTooltip: 'Vos données sont sauvegardées en toute sécurité sur le Cloud.',
+      syncing: 'Synchronisation...',
+      syncingTooltip: 'Sauvegarde de vos modifications sur le Cloud...',
+      verifying: 'Vérification de la connexion...',
+      offline: 'Hors ligne (Local)',
+      offlineTooltip: 'Vous êtes hors ligne. Vos données et articles restent accessibles via le Cache local (IndexedDB).',
+      cache: 'Cache (Local)',
+      cacheTooltip: 'Mode Hors-ligne : Vos données sont conservées et servies depuis le Cache local sécurisé.',
+      guest: 'Mode Invité',
+      guestTooltip: 'Connectez-vous pour sauvegarder vos données dans le Cloud et y accéder partout.',
+      lastSync: 'Dernière sauvegarde',
+      justNow: "à l'instant",
+      syncNowBtn: 'Synchroniser maintenant',
+      testConnBtn: 'Tester la connexion',
+      testing: 'Test en cours...',
+      autoSaveActive: 'Sauvegarde automatique : Active',
+      autoSaveInactive: 'Sauvegarde automatique : Désactivée',
+      forceSyncSuccess: 'Toutes les données ont été synchronisées !',
+      statusLabel: 'Statut',
+      accountLabel: 'Compte lié',
+      storageLabel: 'Stockage principal',
+      cloudStorage: 'Cloud Sécurisé',
+      localStorage: 'Mémoire locale (Cache)',
+      guestStorage: 'Mémoire de l\'appareil',
+      guestAccount: 'Aucun (Invité)',
+      autoSaveLabel: 'Sauvegarde Auto',
+      activeLabel: 'Active',
+      inactiveLabel: 'Désactivée',
+      connectionOnline: 'En ligne',
+      connectionOffline: 'Hors ligne (Cache actif)',
+      connectionLabel: 'Réseau',
+      cacheStatsLabel: 'Articles en cache',
+      readySuffix: 'articles prêts',
+      stillOffline: 'Toujours hors ligne',
+      connFailed: 'Échec de connexion au serveur',
+    },
+    en: {
+      title: 'Cloud Backup & Sync',
+      synced: 'Data synchronized',
+      syncedTooltip: 'Your data is securely backed up to the Cloud.',
+      syncing: 'Syncing...',
+      syncingTooltip: 'Saving your changes to the Cloud...',
+      verifying: 'Verifying connection...',
+      offline: 'Offline (Local)',
+      offlineTooltip: 'You are offline. Your articles and changes remain accessible via local Cache (IndexedDB).',
+      cache: 'Cache (Local)',
+      cacheTooltip: 'Offline mode: Your data is safely stored and served from local Cache.',
+      guest: 'Guest Mode',
+      guestTooltip: 'Sign in to back up your data to the Cloud and access it anywhere.',
+      lastSync: 'Last backup',
+      justNow: 'just now',
+      syncNowBtn: 'Sync Now',
+      testConnBtn: 'Test Connection',
+      testing: 'Testing...',
+      autoSaveActive: 'Auto-Save: Active',
+      autoSaveInactive: 'Auto-Save: Disabled',
+      forceSyncSuccess: 'All data has been synchronized!',
+      statusLabel: 'Status',
+      accountLabel: 'Linked Account',
+      storageLabel: 'Primary Storage',
+      cloudStorage: 'Secure Cloud',
+      localStorage: 'Device Storage (Cache)',
+      guestStorage: 'Device Memory',
+      guestAccount: 'None (Guest)',
+      autoSaveLabel: 'Auto Backup',
+      activeLabel: 'Active',
+      inactiveLabel: 'Disabled',
+      connectionOnline: 'Online',
+      connectionOffline: 'Offline (Cache active)',
+      connectionLabel: 'Network',
+      cacheStatsLabel: 'Cached Articles',
+      readySuffix: 'articles ready',
+      stillOffline: 'Still offline',
+      connFailed: 'Failed to connect to server',
+    },
+    ha: {
+      title: 'Adana a Gajimare',
+      synced: 'An daidaita bayanai',
+      syncedTooltip: 'Ana adana bayananku lami lafiya a Gajimare.',
+      syncing: 'Ana daidaitawa...',
+      syncingTooltip: 'Ana adana canje-canjenku a Gajimare...',
+      verifying: 'Tabbatar da haɗin yanar gizo...',
+      offline: 'Ba ya kan layi (Cache)',
+      offlineTooltip: 'Ba kwa kan layi. An adana bayananku a wayarku (Cache), kuma za su daidaita idan kun shiga layi.',
+      cache: 'Cache (Ajiye a waya)',
+      cacheTooltip: 'Bayananku suna nan a ajiye a wayarku (Cache).',
+      guest: 'Yanayin Bako',
+      guestTooltip: 'Shiga don adana bayananku a gajimare don samun dama a ko\'ina.',
+      lastSync: 'Adana na ƙarshe',
+      justNow: 'yanzu-yanzu',
+      syncNowBtn: 'Daidaita Yanzu',
+      testConnBtn: 'Gwada Haɗin Yanar Gizo',
+      testing: 'Ana gwadawa...',
+      autoSaveActive: 'Adana kai tsaye: Kunnawa',
+      autoSaveInactive: 'Adana kai tsaye: Kashewa',
+      forceSyncSuccess: 'An daidaita dukkan bayanai cikin nasara!',
+      statusLabel: 'Matsayi',
+      accountLabel: 'Asusunku',
+      storageLabel: 'Babban Ma\'ajiya',
+      cloudStorage: 'Gajimare Mai Tsaro',
+      localStorage: 'Ma\'ajiyar Waya (Cache)',
+      guestStorage: 'Ma\'ajiyar Na\'ura',
+      guestAccount: 'Babu (Bako)',
+      autoSaveLabel: 'Ajiya kai tsaye',
+      activeLabel: 'Kunnawa',
+      inactiveLabel: 'Kashewa',
+      connectionOnline: 'Kan layi',
+      connectionOffline: 'Ba ya kan layi (Cache yana aiki)',
+      connectionLabel: 'Hanyar sadarwa',
+      cacheStatsLabel: 'Makalolin da ke ajiye',
+      readySuffix: 'makaloli a shirye',
+      stillOffline: 'Har yanzu ba a kan layi ba',
+      connFailed: 'An kasa haɗawa da uwar garke',
+    }
+  };
+
+  const currentLang = (language === 'ha' ? 'ha' : language === 'en' ? 'en' : 'fr') as 'fr' | 'en' | 'ha';
+  const tStr = strings[currentLang];
+
+  // Refresh SWR stats
+  const refreshCacheStats = async () => {
+    try {
+      const stats = await getSWRCacheStats();
+      setSwrStats(stats);
+    } catch (e) {}
+  };
+
+  // Listen to SWR revalidation events for explicit offline cache tracking
+  useEffect(() => {
+    const handleSWREvent = (e: any) => {
+      refreshCacheStats();
+      if (e?.detail?.isServingFromCache || e?.detail?.isOffline || !navigator.onLine) {
+        setSyncState('cache');
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener(SWR_EVENT_NAME, handleSWREvent);
+      return () => window.removeEventListener(SWR_EVENT_NAME, handleSWREvent);
+    }
+  }, []);
+
+  // Watch online/offline status
+  useEffect(() => {
+    refreshCacheStats();
+
+    if (isOnline && user) {
+      setSyncState('syncing');
+      revalidatePublishedArticles('badge_online').finally(() => {
+        refreshCacheStats();
+      });
+      const timer = setTimeout(() => {
+        setSyncState('synced');
+        setLastSyncTime(new Date());
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [user, isOnline]);
+
+  // Handle syncing state transitions
+  useEffect(() => {
+    if (!isOnline) {
+      setSyncState((swrStats?.count ?? 0) > 0 ? 'cache' : 'offline');
+    } else if (!user) {
+      setSyncState('guest');
+    } else if (isForcingSync) {
+      setSyncState('syncing');
+    } else {
+      setSyncState('synced');
+    }
+  }, [isOnline, user, isForcingSync, swrStats?.count]);
+
+  // Click outside to close popover
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
+        setShowPopover(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleForceSync = async () => {
+    setIsForcingSync(true);
+    setShowSuccessMsg(false);
+    setTestResult(null);
+
+    try {
+      // 1. Actively check connectivity
+      const reachable = await recheckNetwork();
+      
+      // 2. Fetch fresh articles (runs both Firestore SDK & REST API fallback)
+      await revalidatePublishedArticles('badge_force_sync');
+      await refreshCacheStats();
+
+      if (user) {
+        try {
+          await getDocFromServer(doc(db, 'users', user.uid));
+        } catch (e) {
+          // Non-blocking: user doc ping error should not block article sync
+        }
+      }
+
+      setLastSyncTime(new Date());
+      setSyncState(user ? 'synced' : 'guest');
+      setShowSuccessMsg(true);
+      
+      // Auto-hide success message after 3 seconds
+      setTimeout(() => {
+        setShowSuccessMsg(false);
+      }, 3000);
+    } catch (error: any) {
+      console.warn("Connection test failed during manual sync:", error);
+      setTestResult(tStr.connFailed);
+      setTimeout(() => setTestResult(null), 4000);
+    } finally {
+      setIsForcingSync(false);
+    }
+  };
+
+  const isVerifying = isChecking || isForcingSync || syncState === 'syncing' || testResult === tStr.testing;
+
+  const getStatusColor = () => {
+    if (isVerifying) {
+      return 'bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-500/20 dark:text-blue-300 dark:hover:bg-blue-500/30 ring-blue-400/40';
+    }
+    switch (syncState) {
+      case 'synced':
+        return 'bg-emerald-500 text-white hover:bg-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-300 dark:hover:bg-emerald-500/30 ring-emerald-400/30';
+      case 'cache':
+        return 'bg-gradient-to-r from-amber-600 to-amber-500 text-white hover:from-amber-700 hover:to-amber-600 ring-2 ring-amber-400/60 shadow-md shadow-amber-500/20';
+      case 'offline':
+        return 'bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:from-amber-600 hover:to-orange-600 ring-2 ring-amber-300/60 shadow-md shadow-amber-500/20';
+      case 'guest':
+        return 'bg-gray-500 text-white hover:bg-gray-600 dark:bg-gray-700/50 dark:text-gray-300 dark:hover:bg-gray-700 ring-gray-400/30';
+    }
+  };
+
+  const getStatusIcon = () => {
+    if (isVerifying) {
+      return <RefreshCw size={16} className="animate-spin shrink-0" />;
+    }
+    switch (syncState) {
+      case 'synced':
+        return <Cloud size={16} className="shrink-0" />;
+      case 'cache':
+        return <HardDrive size={15} className="shrink-0 text-amber-100 animate-pulse" />;
+      case 'offline':
+        return <CloudOff size={16} className="shrink-0 animate-bounce text-amber-100" />;
+      case 'guest':
+        return <Info size={16} className="shrink-0" />;
+    }
+  };
+
+  const getStatusLabel = () => {
+    if (isVerifying) {
+      return tStr.verifying;
+    }
+    switch (syncState) {
+      case 'synced':
+        return tStr.synced;
+      case 'cache':
+        return tStr.cache;
+      case 'offline':
+        return tStr.offline;
+      case 'guest':
+        return tStr.guest;
+    }
+  };
+
+  const formatLastSync = () => {
+    if (!lastSyncTime) return '-';
+    // Format friendly time
+    return `${lastSyncTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+  };
+
+  return (
+    <div className="relative inline-block shrink-0" ref={popoverRef}>
+      {/* Small badge trigger with subtle framer-motion breathing animation when verifying connection */}
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
+        animate={
+          isVerifying
+            ? {
+                scale: [1, 1.05, 1],
+                opacity: [0.88, 1, 0.88],
+                boxShadow: [
+                  '0 0 0 0px rgba(59, 130, 246, 0.45)',
+                  '0 0 0 6px rgba(59, 130, 246, 0)',
+                  '0 0 0 0px rgba(59, 130, 246, 0)',
+                ],
+              }
+            : undefined
+        }
+        transition={
+          isVerifying
+            ? {
+                duration: 1.6,
+                repeat: Infinity,
+                ease: 'easeInOut',
+              }
+            : undefined
+        }
+        onClick={() => {
+          refreshCacheStats();
+          setShowPopover(!showPopover);
+        }}
+        className={`flex items-center gap-1.5 px-2 min-[375px]:px-2.5 py-1.5 rounded-full text-xs font-semibold shadow-sm transition-all duration-300 cursor-pointer border border-transparent backdrop-blur-sm shrink-0 ${getStatusColor()} ${
+          !isVerifying && (syncState === 'offline' || syncState === 'cache') ? 'animate-pulse' : ''
+        }`}
+        title={getStatusLabel()}
+        id="cloud-sync-status-badge"
+      >
+        <span className="relative flex h-2 w-2 items-center justify-center">
+          {isVerifying && (
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75"></span>
+          )}
+          {!isVerifying && syncState === 'synced' && (
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-40"></span>
+          )}
+          {!isVerifying && (syncState === 'offline' || syncState === 'cache') && (
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-200 opacity-90"></span>
+          )}
+          <span className={`relative inline-flex h-2 w-2 rounded-full ${
+            isVerifying ? 'bg-blue-400 animate-pulse' :
+            syncState === 'synced' ? 'bg-emerald-400' :
+            syncState === 'cache' ? 'bg-amber-300' :
+            syncState === 'offline' ? 'bg-amber-100' :
+            'bg-gray-400'
+          }`}></span>
+        </span>
+        
+        {getStatusIcon()}
+        
+        {/* Status chip with Cache emphasis */}
+        <span className="hidden md:inline-block max-w-[130px] truncate">
+          {isVerifying ? tStr.verifying : (syncState === 'cache' ? 'Cache' : getStatusLabel())}
+        </span>
+      </motion.button>
+
+      {/* Popover Card */}
+      <AnimatePresence>
+        {showPopover && (
+          <motion.div
+            initial={{ opacity: 0, y: 12, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.95 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="absolute right-0 mt-2.5 w-76 sm:w-84 bg-white dark:bg-gray-950 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-800/80 p-5 z-50 text-left overflow-hidden"
+          >
+            {/* Background design accents */}
+            <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-xl -translate-y-6 translate-x-6 pointer-events-none" />
+            <div className="absolute bottom-0 left-0 w-24 h-24 bg-amber-500/5 rounded-full blur-xl translate-y-6 -translate-x-6 pointer-events-none" />
+
+            <div className="relative z-10">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-800/50 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Database size={16} className="text-emerald-500 dark:text-emerald-400" />
+                  <h4 className="font-bold text-sm text-gray-900 dark:text-white">
+                    {tStr.title}
+                  </h4>
+                </div>
+                <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                  syncState === 'synced' ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400' :
+                  syncState === 'syncing' ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' :
+                  syncState === 'cache' ? 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300' :
+                  syncState === 'offline' ? 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300 animate-pulse' :
+                  'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+                }`}>
+                  {(syncState === 'offline' || syncState === 'cache') && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />}
+                  {syncState === 'synced' ? tStr.connectionOnline : 
+                   syncState === 'cache' ? tStr.cache :
+                   syncState === 'offline' ? tStr.connectionOffline : getStatusLabel()}
+                </span>
+              </div>
+
+              {/* Tooltip Description */}
+              <p className={`text-xs leading-relaxed p-3 rounded-xl border mb-4 ${
+                syncState === 'offline' || syncState === 'cache'
+                  ? 'bg-amber-50/80 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800/40' 
+                  : 'bg-gray-50 dark:bg-gray-900/40 text-gray-600 dark:text-gray-300 border-gray-100/50 dark:border-gray-800/30'
+              }`}>
+                {syncState === 'synced' && tStr.syncedTooltip}
+                {syncState === 'syncing' && tStr.syncingTooltip}
+                {syncState === 'cache' && tStr.cacheTooltip}
+                {syncState === 'offline' && tStr.offlineTooltip}
+                {syncState === 'guest' && tStr.guestTooltip}
+              </p>
+
+              {/* Sync Metadata Details */}
+              <div className="space-y-2.5 mb-5 text-xs">
+                {/* Linked Account */}
+                <div className="flex justify-between items-center text-gray-500 dark:text-gray-400">
+                  <span>{tStr.accountLabel}</span>
+                  <span className="font-medium text-gray-800 dark:text-gray-200 truncate max-w-[150px]" title={user?.email || undefined}>
+                    {user ? user.email : tStr.guestAccount}
+                  </span>
+                </div>
+
+                {/* Network Connection */}
+                <div className="flex justify-between items-center text-gray-500 dark:text-gray-400">
+                  <span>{tStr.connectionLabel}</span>
+                  <span className="flex items-center gap-1 font-medium text-gray-800 dark:text-gray-200">
+                    {isOnline ? (
+                      <>
+                        <Wifi size={12} className="text-emerald-500" />
+                        <span>{tStr.connectionOnline}</span>
+                      </>
+                    ) : (
+                      <>
+                        <WifiOff size={12} className="text-amber-500 animate-pulse" />
+                        <span className="text-amber-600 dark:text-amber-400 font-bold">{tStr.connectionOffline}</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* Storage Type */}
+                <div className="flex justify-between items-center text-gray-500 dark:text-gray-400">
+                  <span>{tStr.storageLabel}</span>
+                  <span className="flex items-center gap-1 font-medium text-gray-800 dark:text-gray-200">
+                    <Server size={12} className="text-emerald-500 dark:text-emerald-400" />
+                    <span>
+                      {syncState === 'offline' ? tStr.localStorage :
+                       syncState === 'guest' ? tStr.guestStorage : tStr.cloudStorage}
+                    </span>
+                  </span>
+                </div>
+
+                {/* Cached Articles Stats */}
+                {swrStats && (
+                  <div className="flex justify-between items-center text-gray-500 dark:text-gray-400 bg-emerald-50/50 dark:bg-emerald-950/20 px-2 py-1.5 rounded-lg border border-emerald-100 dark:border-emerald-900/30">
+                    <span className="flex items-center gap-1">
+                      <Database size={11} className="text-emerald-600" />
+                      {tStr.cacheStatsLabel}
+                    </span>
+                    <span className="font-bold text-emerald-700 dark:text-emerald-300">
+                      {swrStats.count} {tStr.readySuffix}
+                    </span>
+                  </div>
+                )}
+
+                {/* Auto Save State */}
+                <div className="flex justify-between items-center text-gray-500 dark:text-gray-400">
+                  <span>{tStr.autoSaveLabel}</span>
+                  <span className={`font-semibold px-1.5 py-0.5 rounded-md text-[10px] ${
+                    isAutoSaveEnabled() 
+                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400' 
+                      : 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
+                  }`}>
+                    {isAutoSaveEnabled() ? tStr.activeLabel : tStr.inactiveLabel}
+                  </span>
+                </div>
+
+                {/* Last Sync */}
+                {lastSyncTime && (syncState === 'synced' || syncState === 'offline' || syncState === 'syncing') && (
+                  <div className="flex justify-between items-center text-gray-500 dark:text-gray-400 pt-1 border-t border-gray-100 dark:border-gray-800/30">
+                    <span>{tStr.lastSync}</span>
+                    <span className="font-mono text-gray-700 dark:text-gray-300">
+                      {formatLastSync()}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Feedback toast or error */}
+              {testResult && (
+                <div className="mb-3 p-2 bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-xs rounded-lg flex items-center gap-1.5">
+                  <AlertCircle size={14} className="shrink-0" />
+                  <span>{testResult}</span>
+                </div>
+              )}
+
+              {/* Actions Button */}
+              <div className="relative space-y-2">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => {
+                    setShowPopover(false);
+                    window.dispatchEvent(new CustomEvent('asrarhub_open_article_sync_video_modal'));
+                  }}
+                  className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 via-teal-600 to-amber-500 hover:from-emerald-500 hover:to-amber-400 text-white text-xs font-black py-2.5 px-4 rounded-xl shadow-lg transition-all cursor-pointer"
+                >
+                  <RefreshCw size={14} />
+                  <span>⚡ Synchronisation Vidéo Instantanée</span>
+                </motion.button>
+
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleForceSync}
+                  disabled={isForcingSync}
+                  className={`w-full flex items-center justify-center gap-2 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-xs transition-all cursor-pointer ${
+                    !isOnline 
+                      ? 'bg-amber-600/80 hover:bg-amber-700' 
+                      : 'bg-slate-700 hover:bg-slate-600'
+                  } disabled:opacity-50`}
+                >
+                  <RefreshCw size={12} className={`${isForcingSync ? 'animate-spin' : ''}`} />
+                  <span>
+                    {isForcingSync 
+                      ? tStr.testing 
+                      : !isOnline 
+                      ? tStr.testConnBtn 
+                      : tStr.syncNowBtn}
+                  </span>
+                </motion.button>
+
+                {/* Success Pop Message */}
+                <AnimatePresence>
+                  {showSuccessMsg && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      className="absolute inset-0 flex items-center justify-center bg-emerald-500 text-white text-xs font-bold rounded-xl gap-1.5"
+                    >
+                      <Check size={14} className="stroke-[3]" />
+                      <span>{tStr.forceSyncSuccess}</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
