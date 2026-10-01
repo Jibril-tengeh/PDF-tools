@@ -1,8 +1,10 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
+import JSZip from 'jszip';
 
 dotenv.config();
 
@@ -214,6 +216,43 @@ Réponds STRICTEMENT au format JSON avec cette structure :
     lighting: 'Éclairage trois points diffusé avec léger halo doré',
     composition: 'Règle des tiers avec flou d’arrière-plan bokeh soyeux',
   });
+});
+
+/**
+ * GET /api/project.zip
+ * Returns a complete zip archive of the project source code for Termux / mobile download
+ */
+app.get('/api/project.zip', async (_req, res) => {
+  try {
+    const zip = new JSZip();
+    const rootDir = __dirname;
+    const ignoreDirs = new Set(['node_modules', 'dist', '.git', '.cache', 'build-outputs']);
+
+    function addDirToZip(currentDir: string, zipFolder: JSZip) {
+      const items = fs.readdirSync(currentDir);
+      for (const item of items) {
+        if (ignoreDirs.has(item)) continue;
+        const fullPath = path.join(currentDir, item);
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory()) {
+          const subFolder = zipFolder.folder(item);
+          if (subFolder) addDirToZip(fullPath, subFolder);
+        } else if (stat.isFile()) {
+          const content = fs.readFileSync(fullPath);
+          zipFolder.file(item, content);
+        }
+      }
+    }
+
+    addDirToZip(rootDir, zip);
+    const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="asrarhub-project.zip"');
+    res.send(buffer);
+  } catch (err: any) {
+    console.error('Failed to generate project.zip:', err);
+    res.status(500).json({ error: err?.message || 'Error generating zip' });
+  }
 });
 
 // Production static file serving vs Dev Vite middleware
